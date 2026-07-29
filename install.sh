@@ -40,38 +40,54 @@ echo "⏳ Préparation du système..."
 timedatectl set-ntp true
 pacman -Syy --noconfirm
 
-# 4. Nettoyage et Partitionnement automatique
-echo "⏳ Nettoyage nucléaire de $DISK..."
-# wipefs efface tous les systèmes de fichiers et signatures anciennes
-wipefs -a "$DISK" 2>/dev/null || true
-# sgdisk -Z détruit les GPT primaire et secondaire
-sgdisk -Z "$DISK" 2>/dev/null || true
-# sgdisk -o crée une nouvelle table GPT 100% vierge
-sgdisk -o "$DISK"
+# 4. Nettoyage nucléaire et Partitionnement
+# On détermine le nom des partitions attendues
+if [[ $DISK == *"nvme"* ]] || [[ $DISK == *"mmcblk"* ]]; then
+    PART_EFI="${DISK}p1"
+    PART_ROOT="${DISK}p2"
+else
+    PART_EFI="${DISK}1"
+    PART_ROOT="${DISK}2"
+fi
 
-echo "⏳ Partitionnement de $DISK..."
+echo "⏳ Nettoyage nucléaire de $DISK (suppression des anciennes partitions)..."
+# Démontage de tout ce qui pourrait traîner
+umount -R /mnt 2>/dev/null || true
+swapoff -a 2>/dev/null || true
+dmsetup remove_all 2>/dev/null || true
+
+# Effacement des signatures
+wipefs -a -f "$DISK"* 2>/dev/null || true
+wipefs -a -f "$DISK" 2>/dev/null || true
+
+# Destruction physique des tables GPT (Début et Fin du disque) avec dd
+dd if=/dev/zero of="$DISK" bs=1M count=10 conv=fsync 2>/dev/null || true
+DISK_SIZE_SECTORS=$(blockdev --getsz "$DISK")
+dd if=/dev/zero of="$DISK" bs=512 count=10 seek=$((DISK_SIZE_SECTORS - 10)) conv=fsync 2>/dev/null || true
+
+# Forcer le noyau à relire la table des partitions (maintenant 100% vide)
+partprobe "$DISK" 2>/dev/null || true
+blockdev --rereadpt "$DISK" 2>/dev/null || true
+udevadm settle
+sleep 3
+
+echo "⏳ Création des nouvelles partitions sur $DISK..."
+sgdisk -o "$DISK"
 sgdisk -n 1:0:+300M -t 1:ef00 "$DISK"
 sgdisk -n 2:0:0 -t 2:8300 "$DISK"
 
-# Forcer la relecture
+# Re-forcer la relecture pour bien voir sda1 et sda2
 partprobe "$DISK" 2>/dev/null || true
+blockdev --rereadpt "$DISK" 2>/dev/null || true
 udevadm settle
-sleep 2
+sleep 3
 
-# Récupération dynamique des partitions (BULLETPROOF)
-# On liste les partitions vues par le noyau, peu importe leur numéro (1, 2, 3...)
-mapfile -t PARTS < <(lsblk -lnpo NAME "$DISK")
-
-PART_EFI="${PARTS[1]}"
-PART_ROOT="${PARTS[2]}"
-
-if [ -z "$PART_EFI" ] || [ -z "$PART_ROOT" ]; then
-    echo "❌ Erreur critique : Impossible de détecter les partitions créées."
+if [ ! -b "$PART_EFI" ] || [ ! -b "$PART_ROOT" ]; then
+    echo "❌ Erreur critique : Les partitions $PART_EFI ou $PART_ROOT n'existent pas."
     lsblk
     exit 1
 fi
-
-echo "✅ Partitions détectées : EFI=$PART_EFI, ROOT=$PART_ROOT"
+echo "✅ Partitions créées et détectées : EFI=$PART_EFI, ROOT=$PART_ROOT"
 
 # 5. Formatage et Montage BTRFS optimisé
 echo "⏳ Formatage BTRFS avec compression ZSTD..."
@@ -139,7 +155,6 @@ console-mode max
 editor no
 LOADERCONF
 
-# On utilise les variables dynamiques pour trouver le bon UUID
 ROOT_UUID=\$(blkid -s UUID -o value $PART_ROOT)
 cat << ARCHCONF > /boot/loader/entries/arch.conf
 title   Arch Linux (Zen)
