@@ -41,7 +41,6 @@ timedatectl set-ntp true
 pacman -Syy --noconfirm
 
 # 4. Nettoyage nucléaire et Partitionnement
-# On détermine le nom des partitions attendues
 if [[ $DISK == *"nvme"* ]] || [[ $DISK == *"mmcblk"* ]]; then
     PART_EFI="${DISK}p1"
     PART_ROOT="${DISK}p2"
@@ -51,21 +50,17 @@ else
 fi
 
 echo "⏳ Nettoyage nucléaire de $DISK (suppression des anciennes partitions)..."
-# Démontage de tout ce qui pourrait traîner
 umount -R /mnt 2>/dev/null || true
 swapoff -a 2>/dev/null || true
 dmsetup remove_all 2>/dev/null || true
 
-# Effacement des signatures
 wipefs -a -f "$DISK"* 2>/dev/null || true
 wipefs -a -f "$DISK" 2>/dev/null || true
 
-# Destruction physique des tables GPT (Début et Fin du disque) avec dd
 dd if=/dev/zero of="$DISK" bs=1M count=10 conv=fsync 2>/dev/null || true
 DISK_SIZE_SECTORS=$(blockdev --getsz "$DISK")
 dd if=/dev/zero of="$DISK" bs=512 count=10 seek=$((DISK_SIZE_SECTORS - 10)) conv=fsync 2>/dev/null || true
 
-# Forcer le noyau à relire la table des partitions (maintenant 100% vide)
 partprobe "$DISK" 2>/dev/null || true
 blockdev --rereadpt "$DISK" 2>/dev/null || true
 udevadm settle
@@ -76,7 +71,6 @@ sgdisk -o "$DISK"
 sgdisk -n 1:0:+300M -t 1:ef00 "$DISK"
 sgdisk -n 2:0:0 -t 2:8300 "$DISK"
 
-# Re-forcer la relecture pour bien voir sda1 et sda2
 partprobe "$DISK" 2>/dev/null || true
 blockdev --rereadpt "$DISK" 2>/dev/null || true
 udevadm settle
@@ -182,11 +176,16 @@ systemctl enable acpid
 # Configuration Hyprland & Login TTY
 USER_HOME="/home/$USERNAME"
 mkdir -p \$USER_HOME/.config/hypr
-cp /etc/hypr/hyprland.conf \$USER_HOME/.config/hypr/
+mkdir -p \$USER_HOME/.config/waybar
 
-cat << HYPRLAND >> \$USER_HOME/.config/hypr/hyprland.conf
+# Copier la config waybar par défaut si elle existe
+cp -r /etc/xdg/waybar/* \$USER_HOME/.config/waybar/ 2>/dev/null || true
 
-# --- Config perso ---
+# Création directe du fichier de configuration Hyprland (infaillible)
+cat << HYPRLAND > \$USER_HOME/.config/hypr/hyprland.conf
+# Configuration de base Hyprland
+monitor=,preferred,auto,1
+
 input {
     kb_layout = fr
     touchpad {
@@ -194,8 +193,28 @@ input {
         tap-to-click = true
     }
 }
+
+gestures {
+    workspace_swipe = true
+}
+
+# Raccourcis basiques
+bind = SUPER, Q, exec, kitty
+bind = SUPER, Return, exec, wofi --show drun
+bind = SUPER, M, exit, 
+bind = SUPER, V, togglefloating, 
+
+# Autostart
+exec-once = waybar
+
+# Gestion des fenêtres
+dwindle {
+    pseudotile = yes
+    preserve_split = yes
+}
 HYPRLAND
 
+# Lancement auto de Hyprland sur TTY1
 cat << BASHPROFILE > \$USER_HOME/.bash_profile
 if [ -z "\${WAYLAND_DISPLAY}" ] && [ "\${XDG_VTNR}" -eq 1 ]; then
     exec Hyprland
