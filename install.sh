@@ -40,41 +40,38 @@ echo "⏳ Préparation du système..."
 timedatectl set-ntp true
 pacman -Syy --noconfirm
 
-# 4. Partitionnement automatique
-echo "⏳ Partitionnement de $DISK..."
-if [[ $DISK == *"nvme"* ]] || [[ $DISK == *"mmcblk"* ]]; then
-    PART_EFI="${DISK}p1"
-    PART_ROOT="${DISK}p2"
-else
-    PART_EFI="${DISK}1"
-    PART_ROOT="${DISK}2"
-fi
+# 4. Nettoyage et Partitionnement automatique
+echo "⏳ Nettoyage nucléaire de $DISK..."
+# wipefs efface tous les systèmes de fichiers et signatures anciennes
+wipefs -a "$DISK" 2>/dev/null || true
+# sgdisk -Z détruit les GPT primaire et secondaire
+sgdisk -Z "$DISK" 2>/dev/null || true
+# sgdisk -o crée une nouvelle table GPT 100% vierge
+sgdisk -o "$DISK"
 
-sgdisk -Z "$DISK"
+echo "⏳ Partitionnement de $DISK..."
 sgdisk -n 1:0:+300M -t 1:ef00 "$DISK"
 sgdisk -n 2:0:0 -t 2:8300 "$DISK"
 
-# CORRECTION : Forcer la relecture et attendre que les partitions existent
+# Forcer la relecture
 partprobe "$DISK" 2>/dev/null || true
-partx -u "$DISK" 2>/dev/null || true
 udevadm settle
+sleep 2
 
-echo "⏳ Attente de l'apparition des partitions dans /dev/..."
-for i in {1..10}; do
-    if [ -b "$PART_EFI" ] && [ -b "$PART_ROOT" ]; then
-        echo "✅ Partitions disponibles."
-        break
-    fi
-    sleep 1
-done
+# Récupération dynamique des partitions (BULLETPROOF)
+# On liste les partitions vues par le noyau, peu importe leur numéro (1, 2, 3...)
+mapfile -t PARTS < <(lsblk -lnpo NAME "$DISK")
 
-# Si après 10 secondes ça ne marche pas, on arrête pour ne pas effacer un mauvais disque
-if [ ! -b "$PART_EFI" ] || [ ! -b "$PART_ROOT" ]; then
-    echo "❌ Erreur critique : Les partitions $PART_EFI ou $PART_ROOT n'existent pas."
-    echo "Voici ce que le système voit :"
+PART_EFI="${PARTS[1]}"
+PART_ROOT="${PARTS[2]}"
+
+if [ -z "$PART_EFI" ] || [ -z "$PART_ROOT" ]; then
+    echo "❌ Erreur critique : Impossible de détecter les partitions créées."
     lsblk
     exit 1
 fi
+
+echo "✅ Partitions détectées : EFI=$PART_EFI, ROOT=$PART_ROOT"
 
 # 5. Formatage et Montage BTRFS optimisé
 echo "⏳ Formatage BTRFS avec compression ZSTD..."
@@ -142,6 +139,7 @@ console-mode max
 editor no
 LOADERCONF
 
+# On utilise les variables dynamiques pour trouver le bon UUID
 ROOT_UUID=\$(blkid -s UUID -o value $PART_ROOT)
 cat << ARCHCONF > /boot/loader/entries/arch.conf
 title   Arch Linux (Zen)
