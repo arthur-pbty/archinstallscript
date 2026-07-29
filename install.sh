@@ -28,7 +28,7 @@ else
     MICROCODE_IMG=""
 fi
 
-# 2. Vérification d'internet (le script suppose que tu as utilisé iwctl avant)
+# 2. Vérification d'internet
 if ! ping -c 1 archlinux.org &> /dev/null; then
     echo "❌ Erreur : Pas de connexion internet. Connecte-toi avec iwctl d'abord."
     exit 1
@@ -54,10 +54,27 @@ sgdisk -Z "$DISK"
 sgdisk -n 1:0:+300M -t 1:ef00 "$DISK"
 sgdisk -n 2:0:0 -t 2:8300 "$DISK"
 
-# CORRECTION DE L'ERREUR : Forcer le noyau à relire la table des partitions
+# CORRECTION : Forcer la relecture et attendre que les partitions existent
 partprobe "$DISK" 2>/dev/null || true
+partx -u "$DISK" 2>/dev/null || true
 udevadm settle
-sleep 1
+
+echo "⏳ Attente de l'apparition des partitions dans /dev/..."
+for i in {1..10}; do
+    if [ -b "$PART_EFI" ] && [ -b "$PART_ROOT" ]; then
+        echo "✅ Partitions disponibles."
+        break
+    fi
+    sleep 1
+done
+
+# Si après 10 secondes ça ne marche pas, on arrête pour ne pas effacer un mauvais disque
+if [ ! -b "$PART_EFI" ] || [ ! -b "$PART_ROOT" ]; then
+    echo "❌ Erreur critique : Les partitions $PART_EFI ou $PART_ROOT n'existent pas."
+    echo "Voici ce que le système voit :"
+    lsblk
+    exit 1
+fi
 
 # 5. Formatage et Montage BTRFS optimisé
 echo "⏳ Formatage BTRFS avec compression ZSTD..."
@@ -112,15 +129,13 @@ useradd -m -G wheel,video,audio,input,storage -s /bin/bash $USERNAME
 echo "$USERNAME:$USER_PASS" | chpasswd
 sed -i '/^# %wheel ALL=(ALL:ALL) ALL/s/^# //' /etc/sudoers
 
-# Initramfs optimisé avec systemd (démarrage plus rapide)
+# Initramfs optimisé avec systemd
 sed -i 's/^HOOKS=.*/HOOKS=(base systemd autodetect modconf block filesystems keyboard btrfs)/' /etc/mkinitcpio.conf
-# Compression ZSTD pour l'initramfs
 sed -i 's/^#COMPRESSION="zstd"/COMPRESSION="zstd"/' /etc/mkinitcpio.conf
 mkinitcpio -P
 
 # Bootloader (systemd-boot) optimisé
 bootctl --path=/boot install
-# Configuration loader.conf (Timeout 0, éditeur désactivé)
 cat << LOADERCONF > /boot/loader/loader.conf
 timeout 0
 console-mode max
@@ -128,7 +143,6 @@ editor no
 LOADERCONF
 
 ROOT_UUID=\$(blkid -s UUID -o value $PART_ROOT)
-# Options noyau pour laptop (quiet, loglevel bas, économie d'énergie PCIe)
 cat << ARCHCONF > /boot/loader/entries/arch.conf
 title   Arch Linux (Zen)
 linux   /vmlinuz-linux-zen
@@ -157,7 +171,6 @@ USER_HOME="/home/$USERNAME"
 mkdir -p \$USER_HOME/.config/hypr
 cp /etc/hypr/hyprland.conf \$USER_HOME/.config/hypr/
 
-# Clavier FR et optimisations basiques dans Hyprland
 cat << HYPRLAND >> \$USER_HOME/.config/hypr/hyprland.conf
 
 # --- Config perso ---
@@ -170,7 +183,6 @@ input {
 }
 HYPRLAND
 
-# Lancement auto de Hyprland sur TTY1
 cat << BASHPROFILE > \$USER_HOME/.bash_profile
 if [ -z "\${WAYLAND_DISPLAY}" ] && [ "\${XDG_VTNR}" -eq 1 ]; then
     exec Hyprland
