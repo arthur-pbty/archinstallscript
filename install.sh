@@ -7,8 +7,7 @@ DISK="/dev/sda"             # Disque cible (ex: /dev/sda ou /dev/nvme0n1)
 USERNAME="archuser"         # Ton nom d'utilisateur
 USER_PASS="motdepasse123"   # Mot de passe utilisateur
 ROOT_PASS="rootpassword123" # Mot de passe root
-WIFI_SSID="TonReseauWiFi"   # Nom du réseau Wi-Fi
-WIFI_PASS="CleWiFi123"      # Clé WPA du Wi-Fi
+HOSTNAME="arch-laptop"
 # ==============================================================================
 
 set -e
@@ -29,27 +28,20 @@ else
     MICROCODE_IMG=""
 fi
 
-# 2. Connexion Wi-Fi automatique
-echo "Configuration du Wi-Fi..."
-WLAN_IF=$(ls /sys/class/net/ | grep -v lo | grep wlan | head -n 1)
-if [ -n "$WLAN_IF" ]; then
-    iwctl --passphrase "$WIFI_PASS" station "$WLAN_IF" connect "$WIFI_SSID"
-    sleep 5
-fi
-
+# 2. Vérification d'internet (le script suppose que tu as utilisé iwctl avant)
 if ! ping -c 1 archlinux.org &> /dev/null; then
-    echo "Erreur : Pas de connexion internet. Vérifie tes variables Wi-Fi ou branche un câble Ethernet."
+    echo "❌ Erreur : Pas de connexion internet. Connecte-toi avec iwctl d'abord."
     exit 1
 fi
-echo "Connexion internet établie."
+echo "✅ Connexion internet établie."
 
 # 3. Synchronisation horloge et dépôts
-echo "Préparation du système..."
+echo "⏳ Préparation du système..."
 timedatectl set-ntp true
 pacman -Syy --noconfirm
 
 # 4. Partitionnement automatique
-echo "Partitionnement de $DISK..."
+echo "⏳ Partitionnement de $DISK..."
 if [[ $DISK == *"nvme"* ]] || [[ $DISK == *"mmcblk"* ]]; then
     PART_EFI="${DISK}p1"
     PART_ROOT="${DISK}p2"
@@ -62,8 +54,13 @@ sgdisk -Z "$DISK"
 sgdisk -n 1:0:+300M -t 1:ef00 "$DISK"
 sgdisk -n 2:0:0 -t 2:8300 "$DISK"
 
+# CORRECTION DE L'ERREUR : Forcer le noyau à relire la table des partitions
+partprobe "$DISK" 2>/dev/null || true
+udevadm settle
+sleep 1
+
 # 5. Formatage et Montage BTRFS optimisé
-echo "Formatage BTRFS avec compression ZSTD..."
+echo "⏳ Formatage BTRFS avec compression ZSTD..."
 mkfs.fat -F32 "$PART_EFI"
 mkfs.btrfs -f "$PART_ROOT"
 
@@ -72,20 +69,20 @@ mkdir -p /mnt/boot
 mount "$PART_EFI" /mnt/boot
 
 # 6. Installation du système strict minimum et optimisé
-echo "Installation des paquets (Noyau ZEN, Hyprland, Wayland, Opti Laptop)..."
+echo "⏳ Installation des paquets (Noyau ZEN, Hyprland, Wayland, Opti Laptop)..."
 pacstrap /mnt base base-devel linux-zen linux-zen-headers linux-firmware btrfs-progs \
-    networkmanager iwd sudo git neovim \
+    networkmanager sudo git neovim \
     $MICROCODE power-profiles-daemon thermald acpi acpid brightnessctl \
     pipewire pipewire-pulse pipewire-alsa pipewire-jack wireplumber \
     mesa wayland xdg-desktop-portal xdg-desktop-portal-hyprland \
     hyprland kitty wofi waybar hyprpaper ttf-jetbrains-mono-nerd
 
 # 7. Génération fstab optimisée
-echo "Génération du fstab..."
+echo "⏳ Génération du fstab..."
 genfstab -U /mnt >> /mnt/etc/fstab
 
 # 8. Configuration système dans le chroot
-echo "Configuration du système..."
+echo "⏳ Configuration du système..."
 cat > /mnt/setup.sh << EOF
 #!/bin/bash
 set -e
@@ -106,7 +103,7 @@ echo "$HOSTNAME" > /etc/hostname
 cat << HOSTS > /etc/hosts
 127.0.0.1   localhost
 ::1         localhost
-127.0.1.1   arch-laptop.localdomain   arch-laptop
+127.0.1.1   $HOSTNAME.localdomain   $HOSTNAME
 HOSTS
 
 # Utilisateurs
@@ -151,7 +148,6 @@ bootctl update
 
 # Services modernes pour laptop
 systemctl enable NetworkManager
-systemctl enable iwd
 systemctl enable power-profiles-daemon
 systemctl enable thermald
 systemctl enable acpid
@@ -193,7 +189,7 @@ rm /mnt/setup.sh
 umount -R /mnt
 
 echo "=================================================="
-echo "INSTALLATION TERMINÉE AVEC SUCCÈS !"
+echo "✅ INSTALLATION TERMINÉE AVEC SUCCÈS !"
 echo "=================================================="
 echo "Redémarrage dans 3 secondes..."
 sleep 3
