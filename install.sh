@@ -114,9 +114,10 @@ cat > /mnt/setup.sh << EOF
 #!/bin/bash
 set -e
 
-# Mise à jour complète du système pour avoir la bonne version de pacman/libalpm
-echo "[INFO] Mise à jour du système (pacman -Syu)..."
-pacman -Syu --noconfirm
+# Mise à jour de la keyring et du système pour éviter les problèmes de librairies
+echo "[INFO] Mise à jour de la keyring et du système..."
+pacman -Sy --noconfirm archlinux-keyring
+pacman -Su --noconfirm
 
 # Fuseau horaire
 ln -sf /usr/share/zoneinfo/Europe/Paris /etc/localtime
@@ -197,7 +198,7 @@ ExecStart=
 ExecStart=-/usr/bin/agetty --autologin $USERNAME --noclear %I \$TERM
 GETTYCONF
 
-# Configuration AUR (paru-bin) et optimisation RAM
+# Configuration AUR (paru) et optimisation RAM
 echo "[INFO] Configuration de sudo sans mot de passe temporaire..."
 echo "$USERNAME ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/temp
 chmod 0440 /etc/sudoers.d/temp
@@ -215,13 +216,13 @@ CombinedUpgrade = true
 PARUCONF
 chown -R $USERNAME:$USERNAME /home/$USERNAME/.config/paru
 
-echo "[INFO] Installation de paru-bin (evite le Out of Memory)..."
-sudo -u $USERNAME bash -c "cd /tmp && git clone https://aur.archlinux.org/paru-bin.git && cd paru-bin && makepkg -si --noconfirm" || echo "[WARNING] Paru install failed"
+echo "[INFO] Compilation de paru depuis les sources (limité à 1 coeur pour éviter le Out of Memory)..."
+sudo -u $USERNAME bash -c "export CARGO_BUILD_JOBS=1; export MAKEFLAGS='-j1'; cd /tmp && git clone https://aur.archlinux.org/paru.git && cd paru && makepkg -si --noconfirm --skippgpcheck" || echo "[WARNING] Paru install failed"
 
 if ! command -v paru &> /dev/null; then
     echo "[ERROR] paru n'a pas pu être installé."
 else
-    echo "[INFO] Installation de ghostty et bluetui (limitation a 1 coeur pour eviter le Out of Memory)..."
+    echo "[INFO] Installation de ghostty et bluetui (limité à 1 coeur)..."
     sudo -u $USERNAME bash -c "export CARGO_BUILD_JOBS=1; export MAKEFLAGS='-j1'; paru -S --noconfirm --skipreview ghostty-git bluetui" || echo "[WARNING] Erreur pendant l'install de ghostty/bluetui"
 fi
 
