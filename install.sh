@@ -50,9 +50,7 @@ else
 fi
 
 echo "[INFO] Nettoyage nucléaire de $DISK et démontage forcé..."
-# Démonter /mnt récursivement au cas où une ancienne install aurait planté
 umount -R /mnt 2>/dev/null || true
-# Forcer le démontage des partitions spécifiques du disque cible
 umount ${DISK}* 2>/dev/null || true
 swapoff -a 2>/dev/null || true
 dmsetup remove_all 2>/dev/null || true
@@ -208,11 +206,10 @@ echo "[INFO] Configuration de sudo sans mot de passe temporaire..."
 echo "$USERNAME ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/temp
 chmod 0440 /etc/sudoers.d/temp
 
-# Préconfiguration de paru
+# Préconfiguration de paru (sans SudoLoop pour éviter la boucle de 'y')
 mkdir -p /home/$USERNAME/.config/paru
 cat << PARUCONF > /home/$USERNAME/.config/paru/paru.conf
 [options]
-SudoLoop = yes
 SkipReview = yes
 CleanAfter = yes
 Provides = yes
@@ -222,13 +219,14 @@ PARUCONF
 chown -R $USERNAME:$USERNAME /home/$USERNAME/.config/paru
 
 echo "[INFO] Compilation de paru depuis les sources (avec support swap)..."
-sudo -u $USERNAME bash -c "cd /tmp && git clone https://aur.archlinux.org/paru.git && cd paru && makepkg -si --noconfirm --skippgpcheck" || echo "[WARNING] Paru install failed"
+# Redirection de stdin depuis /dev/null pour éviter les boucles interactives
+sudo -u $USERNAME bash -c "cd /tmp && git clone https://aur.archlinux.org/paru.git && cd paru && makepkg -si --noconfirm --skippgpcheck" < /dev/null || echo "[WARNING] Paru install failed"
 
 if ! command -v paru &> /dev/null; then
     echo "[ERROR] paru n'a pas pu être installé."
 else
     echo "[INFO] Installation de ghostty et bluetui (avec support swap)..."
-    sudo -u $USERNAME bash -c "paru -S --noconfirm --skipreview ghostty-git bluetui" || echo "[WARNING] Erreur pendant l'install de ghostty/bluetui"
+    sudo -u $USERNAME bash -c "paru -S --noconfirm --skipreview ghostty-git bluetui" < /dev/null || echo "[WARNING] Erreur pendant l'install de ghostty/bluetui"
 fi
 
 echo "[INFO] Restauration de la sécurité sudo..."
