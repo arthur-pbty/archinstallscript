@@ -50,33 +50,26 @@ else
 fi
 
 echo "[INFO] Nettoyage nucléaire de $DISK et démontage forcé..."
-# Tuer tous les processus qui pourraient utiliser /mnt
 fuser -km /mnt 2>/dev/null || true
 sleep 1
 
-# Démonter /mnt et /mnt/boot explicitement
 umount /mnt/boot 2>/dev/null || true
 umount /mnt 2>/dev/null || true
 
-# Boucler pour démonter TOUTES les partitions du disque cible
 for part in ${DISK}*; do
     umount "$part" 2>/dev/null || true
 done
 
-# Désactiver les swaps et les mappings
 swapoff -a 2>/dev/null || true
 dmsetup remove_all 2>/dev/null || true
 
-# Nettoyer les signatures
 wipefs -a -f "$DISK"* 2>/dev/null || true
 wipefs -a -f "$DISK" 2>/dev/null || true
 
-# Détruire physiquement les tables GPT
 dd if=/dev/zero of="$DISK" bs=1M count=10 conv=fsync 2>/dev/null || true
 DISK_SIZE_SECTORS=$(blockdev --getsz "$DISK")
 dd if=/dev/zero of="$DISK" bs=512 count=10 seek=$((DISK_SIZE_SECTORS - 10)) conv=fsync 2>/dev/null || true
 
-# Forcer la relecture
 partprobe "$DISK" 2>/dev/null || true
 blockdev --rereadpt "$DISK" 2>/dev/null || true
 udevadm settle
@@ -109,6 +102,7 @@ mkdir -p /mnt/boot
 mount "$PART_EFI" /mnt/boot
 
 # 6. Installation du système strict minimum et optimisé
+# AJOUT DE ZIG ET AUTRES DÉPENDANCES DE COMPILATION POUR GHOSTTY
 echo "[INFO] Installation des paquets officiels..."
 pacstrap /mnt base base-devel linux-zen linux-zen-headers linux-firmware btrfs-progs \
     networkmanager sudo git neovim curl wget unzip rsync \
@@ -118,7 +112,8 @@ pacstrap /mnt base base-devel linux-zen linux-zen-headers linux-firmware btrfs-p
     hyprland wofi waybar swaybg ttf-jetbrains-mono-nerd kitty \
     bluez bluez-utils thunar playerctl \
     fastfetch btop htop ncdu yazi lazygit \
-    rust cargo go fontconfig freetype2 harfbuzz libxkbcommon pkgconf
+    rust cargo go zig wayland-protocols scdoc \
+    fontconfig freetype2 harfbuzz libxkbcommon pkgconf
 
 # 7. Génération fstab optimisée
 echo "[INFO] Génération du fstab..."
@@ -239,7 +234,7 @@ sudo -u $USERNAME bash -c "cd /tmp && git clone https://aur.archlinux.org/paru.g
 if ! command -v paru &> /dev/null; then
     echo "[ERROR] paru n'a pas pu être installé."
 else
-    echo "[INFO] Installation de ghostty et bluetui (avec support swap)..."
+    echo "[INFO] Installation de ghostty et bluetui (avec support swap et zig)..."
     sudo -u $USERNAME bash -c "paru -S --noconfirm --skipreview ghostty-git bluetui" < /dev/null || echo "[WARNING] Erreur pendant l'install de ghostty/bluetui"
 fi
 
