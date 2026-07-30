@@ -38,7 +38,7 @@ echo "[INFO] Préparation du système..."
 timedatectl set-ntp true
 pacman -Syy --noconfirm
 
-# 4. Nettoyage nucléaire et Partitionnement (VERSION BULLETPROOF)
+# 4. Nettoyage nucléaire et Partitionnement (VERSION ULTRA-SÉCURISÉE ET CIBLÉE)
 if [[ $DISK == *"nvme"* ]] || [[ $DISK == *"mmcblk"* ]]; then
     PART_EFI="${DISK}p1"
     PART_ROOT="${DISK}p2"
@@ -47,62 +47,67 @@ else
     PART_ROOT="${DISK}2"
 fi
 
-# Sécurité ultime : Vérifier si le disque cible n'est pas le Live USB ou un disque système monté
+# Sécurité ultime : Vérifier si le disque cible n'est pas le Live USB
 if findmnt --source "$DISK" -n -o TARGET > /dev/null 2>&1; then
     echo "[ERROR] Le disque $DISK est actuellement monté et utilisé par le système !"
     echo "        Si tu es sur le Live USB, ton disque cible n'est pas $DISK."
-    echo "        Tape 'lsblk' pour trouver le bon disque (ex: /dev/nvme0n1 ou /dev/sdb)."
+    echo "        Tape 'lsblk' pour trouver le bon disque."
     exit 1
 fi
 
-echo "[INFO] Nettoyage nucléaire et préparation de $DISK..."
+echo "[INFO] Nettoyage nucléaire exclusivement sur $DISK..."
 
-# Démonter dynamiquement TOUTES les partitions existantes sur ce disque
-echo "[INFO] Démontage des partitions existantes..."
-lsblk -lnpo NAME,MOUNTPOINT "$DISK" | awk '$2 != "" {print $1}' | xargs -I {} umount -lf {} 2>/dev/null
-umount -R /mnt 2>/dev/null
-umount -lf /mnt 2>/dev/null
+# Récupérer la liste des partitions EXISTANTES sur ce disque uniquement
+PARTITIONS=$(lsblk -lnpo NAME "$DISK" | tail -n +2)
 
-# Tuer de force tous les processus qui utilisent le disque ou ses partitions
-echo "[INFO] Terminaison des processus utilisant le disque..."
-fuser -ck "$DISK" 2>/dev/null
-lsblk -lnpo NAME "$DISK" | xargs -I {} fuser -ck {} 2>/dev/null
+# Étape A : Tuer les processus et démonter les partitions de $DISK
+for part in $PARTITIONS; do
+    echo "[INFO] Nettoyage de $part..."
+    fuser -ck "$part" 2>/dev/null
+    umount -lf "$part" 2>/dev/null
+    swapoff "$part" 2>/dev/null
+done
 
-# Arrêter les volumes chiffrés, LVM, et RAID
-echo "[INFO] Désactivation de LVM, LUKS, RAID et Swap..."
-vgchange -an 2>/dev/null
-cryptsetup close --all 2>/dev/null
-mdadm --stop --scan 2>/dev/null
-dmsetup remove_all 2>/dev/null
-swapoff -a 2>/dev/null
+# Étape B : Fermer les volumes LUKS et LVM liés à ce disque
+# (C'est ce qui corrige l'erreur "Device or resource busy")
+LUKS_DEVS=$(lsblk -lnpo NAME,TYPE "$DISK" | awk '$2 == "crypt" {print $1}')
+for dev in $LUKS_DEVS; do
+    echo "[INFO] Fermeture du volume chiffré $dev..."
+    umount -lf "$dev" 2>/dev/null
+    cryptsetup close "$dev" 2>/dev/null
+done
 
-# Nettoyer les signatures RAID (superblocks) sur le disque et ses partitions
-echo "[INFO] Effacement des superblocks RAID..."
+LVM_DEVS=$(lsblk -lnpo NAME,TYPE "$DISK" | awk '$2 == "lvm" {print $1}')
+for dev in $LVM_DEVS; do
+    echo "[INFO] Désactivation du volume logique $dev..."
+    umount -lf "$dev" 2>/dev/null
+    lvchange -an "$dev" 2>/dev/null
+done
+
+# Étape C : Effacement des superblocks RAID et signatures sur les partitions
+for part in $PARTITIONS; do
+    mdadm --zero-superblock "$part" 2>/dev/null
+    wipefs -a -f "$part" 2>/dev/null
+done
+
+# Étape D : Nettoyage du disque principal
 mdadm --zero-superblock "$DISK" 2>/dev/null
-lsblk -lnpo NAME "$DISK" | xargs -I {} mdadm --zero-superblock {} 2>/dev/null
-
-# Nettoyer toutes les signatures de systèmes de fichiers
-echo "[INFO] Nettoyage des signatures de systèmes de fichiers..."
 wipefs -a -f "$DISK" 2>/dev/null
-lsblk -lnpo NAME "$DISK" | xargs -I {} wipefs -a -f {} 2>/dev/null
-
-# Zapping complet de la table de partitions (GPT et MBR)
 sgdisk --zap-all "$DISK"
 sgdisk -o "$DISK"
 
-# Destruction physique ciblée : SSD (blkdiscard) vs HDD (DD)
+# Étape E : Destruction physique ciblée (SSD vs HDD)
 if lsblk -dno ROTA "$DISK" | grep -q "^0$"; then
-    echo "[INFO] SSD/NVMe détecté : TRIM complet (blkdiscard) pour un nettoyage parfait et instantané..."
+    echo "[INFO] SSD/NVMe détecté : TRIM complet (blkdiscard) sur $DISK..."
     blkdiscard -f "$DISK"
 else
-    echo "[INFO] Disque mécanique (HDD) détecté : Effacement physique du début et de la fin du disque (DD)..."
+    echo "[INFO] Disque mécanique (HDD) détecté : Effacement physique (DD) sur $DISK..."
     DISK_SIZE_SECTORS=$(blockdev --getsz "$DISK")
     dd if=/dev/zero of="$DISK" bs=1M count=10 conv=fsync oflag=direct status=none
     dd if=/dev/zero of="$DISK" bs=512 count=10 seek=$((DISK_SIZE_SECTORS - 10)) conv=fsync oflag=direct status=none
 fi
 
-# Forcer la relecture par le noyau
-echo "[INFO] Synchronisation du noyau..."
+# Étape F : Forcer la relecture par le noyau
 partprobe "$DISK"
 blockdev --rereadpt "$DISK"
 udevadm settle
@@ -111,7 +116,7 @@ echo "[INFO] Création des nouvelles partitions sur $DISK..."
 sgdisk -n 1:0:+300M -t 1:ef00 "$DISK"
 sgdisk -n 2:0:0 -t 2:8300 "$DISK"
 
-# Attente critique et ROBUSTE pour que le noyau crée les fichiers de périphériques
+# Attente critique et ROBUSTE pour que le noyau crée les fichiers
 echo "[INFO] Attente de la création des nœuds de périphériques..."
 for i in {1..10}; do
     if [ -b "$PART_EFI" ] && [ -b "$PART_ROOT" ]; then
@@ -130,7 +135,7 @@ echo "[OK] Partitions créées et détectées : EFI=$PART_EFI, ROOT=$PART_ROOT"
 # 5. Formatage et Montage BTRFS optimisé
 echo "[INFO] Formatage BTRFS et FAT32..."
 
-# Nettoyage chirurgical des partitions spécifiques juste avant le formatage
+# Nouveau nettoyage chirurgical juste avant le formatage (sécurité absolue)
 wipefs -a -f "$PART_EFI" 2>/dev/null
 wipefs -a -f "$PART_ROOT" 2>/dev/null
 
