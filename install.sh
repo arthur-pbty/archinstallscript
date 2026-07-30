@@ -95,13 +95,14 @@ mount "$PART_EFI" /mnt/boot
 # 6. Installation du système strict minimum et optimisé
 echo "[INFO] Installation des paquets officiels..."
 pacstrap /mnt base base-devel linux-zen linux-zen-headers linux-firmware btrfs-progs \
-    networkmanager sudo git neovim \
+    networkmanager sudo git neovim curl wget unzip rsync \
     $MICROCODE power-profiles-daemon thermald acpi acpid brightnessctl \
     pipewire pipewire-pulse pipewire-alsa pipewire-jack wireplumber \
     mesa wayland xdg-desktop-portal xdg-desktop-portal-hyprland \
     hyprland wofi waybar swaybg ttf-jetbrains-mono-nerd kitty \
     bluez bluez-utils thunar playerctl \
-    fastfetch btop htop ncdu yazi lazygit zram-generator
+    fastfetch btop htop ncdu yazi lazygit zram-generator \
+    fontconfig freetype2 harfbuzz libxkbcommon pkgconf
 
 # 7. Génération fstab optimisée
 echo "[INFO] Génération du fstab..."
@@ -197,11 +198,15 @@ echo "[INFO] Configuration de sudo sans mot de passe temporaire pour l'installat
 echo "$USERNAME ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/temp
 chmod 0440 /etc/sudoers.d/temp
 
-echo "[INFO] Installation de paru-bin..."
-sudo -u $USERNAME bash -c "cd /tmp && git clone https://aur.archlinux.org/paru-bin.git && cd paru-bin && makepkg -si --noconfirm" || true
+echo "[INFO] Installation de paru-bin via su - (plus fiable en chroot)..."
+su - $USERNAME -c "cd /tmp && git clone https://aur.archlinux.org/paru-bin.git && cd paru-bin && makepkg -si --noconfirm" 2>&1 | tee /tmp/paru_install.log
 
-echo "[INFO] Installation de ghostty et bluetui..."
-sudo -u $USERNAME bash -c "paru -S --noconfirm ghostty-git bluetui" || true
+if ! command -v paru &> /dev/null; then
+    echo "[WARNING] paru n'a pas pu être installé. Vérifie le log : /tmp/paru_install.log"
+else
+    echo "[INFO] Installation de ghostty et bluetui..."
+    su - $USERNAME -c "paru -S --noconfirm ghostty-git bluetui" 2>&1 | tee /tmp/aur_install.log || echo "[WARNING] Erreur pendant l'install de ghostty/bluetui"
+fi
 
 echo "[INFO] Restauration de la sécurité sudo..."
 rm -f /etc/sudoers.d/temp
