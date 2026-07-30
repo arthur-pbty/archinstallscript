@@ -1,10 +1,3 @@
-Le compilateur Rust (utilisé pour compiler `paru`) est célèbre pour consommer énormément de RAM. Sur un PC portable avec 4 ou 8 Go de RAM, le noyau Linux tue le processus (OOM Killer) pour protéger le système.
-
-Pour régler ce problème définitivement, j'ai ajouté la création d'un **fichier d'échange (Swap) de 4 Go** juste avant la compilation, ce qui donnera de la marge au système. De plus, j'ai remplacé `paru` par `paru-bin` (une version précompilée), ce qui évite de compiler Rust et rend l'installation instantanée.
-
-Voici le script corrigé (sans emoji) :
-
-```bash
 #!/bin/bash
 
 # ==============================================================================
@@ -108,7 +101,7 @@ pacstrap /mnt base base-devel linux-zen linux-zen-headers linux-firmware btrfs-p
     mesa wayland xdg-desktop-portal xdg-desktop-portal-hyprland \
     hyprland wofi waybar swaybg ttf-jetbrains-mono-nerd \
     bluez bluez-utils thunar playerctl \
-    fastfetch btop htop ncdu yazi lazygit
+    fastfetch btop htop ncdu yazi lazygit zram-generator
 
 # 7. Génération fstab optimisée
 echo "[INFO] Génération du fstab..."
@@ -183,6 +176,14 @@ systemctl enable thermald
 systemctl enable acpid
 systemctl enable bluetooth
 
+# Configuration ZRAM (Swap dans la RAM, beaucoup plus stable que swapfile sur BTRFS)
+cat << ZRAMCONF > /etc/systemd/zram-generator.conf
+[zram0]
+zram-size = ram / 2
+swap-priority = 100
+fs-type = swap
+ZRAMCONF
+
 # Connexion TTY automatique (demande juste le mot de passe)
 mkdir -p /etc/systemd/system/getty@tty1.service.d
 cat << GETTYCONF > /etc/systemd/system/getty@tty1.service.d/override.conf
@@ -190,14 +191,6 @@ cat << GETTYCONF > /etc/systemd/system/getty@tty1.service.d/override.conf
 ExecStart=
 ExecStart=-/usr/bin/agetty --autologin $USERNAME --noclear %I \$TERM
 GETTYCONF
-
-# Création d'un fichier SWAP de 4 Go (pour éviter le crash OOM pendant les compilations)
-echo "[INFO] Création d'un swapfile de 4Go..."
-fallocate -l 4G /swapfile
-chmod 600 /swapfile
-mkswap /swapfile
-swapon /swapfile
-echo "/swapfile none swap defaults 0 0" >> /etc/fstab
 
 # Configuration AUR (paru-bin) et mots de passe automatisés
 echo "[INFO] Configuration de sudo sans mot de passe temporaire pour l'installation AUR..."
@@ -537,7 +530,8 @@ if [ -z "\${WAYLAND_DISPLAY}" ] && [ "\${XDG_VTNR}" -eq 1 ]; then
     while true; do
         read -s -p "Entrez votre mot de passe pour demarrer Hyprland: " PASS
         echo ""
-        if echo "\$PASS" | sudo -S true 2>/dev/null; then
+        # Utilisation de sudo -k pour réinitialiser le cache et forcer la demande
+        if echo "\$PASS" | sudo -S -k true 2>/dev/null; then
             exec Hyprland
             break
         else
@@ -564,4 +558,3 @@ echo "=================================================="
 echo "Redémarrage dans 3 secondes..."
 sleep 3
 reboot
-```
