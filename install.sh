@@ -101,7 +101,7 @@ pacstrap /mnt base base-devel linux-zen linux-zen-headers linux-firmware btrfs-p
     mesa wayland xdg-desktop-portal xdg-desktop-portal-hyprland \
     hyprland wofi waybar swaybg ttf-jetbrains-mono-nerd kitty \
     bluez bluez-utils thunar playerctl \
-    fastfetch btop htop ncdu yazi lazygit zram-generator \
+    fastfetch btop htop ncdu yazi lazygit \
     rust cargo go fontconfig freetype2 harfbuzz libxkbcommon pkgconf
 
 # 7. Génération fstab optimisée
@@ -114,7 +114,7 @@ cat > /mnt/setup.sh << EOF
 #!/bin/bash
 set -e
 
-# Mise à jour de la keyring et du système pour éviter les problèmes de librairies
+# Mise à jour de la keyring et du système pour éviter les problèmes de dépendances
 echo "[INFO] Mise à jour de la keyring et du système..."
 pacman -Sy --noconfirm archlinux-keyring
 pacman -Su --noconfirm
@@ -182,13 +182,15 @@ systemctl enable thermald
 systemctl enable acpid
 systemctl enable bluetooth
 
-# Configuration ZRAM
-cat << ZRAMCONF > /etc/systemd/zram-generator.conf
-[zram0]
-zram-size = ram / 2
-swap-priority = 100
-fs-type = swap
-ZRAMCONF
+# Configuration SWAP (Fichier d'échange de 4 Go compatible BTRFS)
+echo "[INFO] Création d'un swapfile de 4Go pour éviter le Out of Memory..."
+truncate -s 0 /swapfile
+chattr +C /swapfile
+fallocate -l 4G /swapfile
+chmod 600 /swapfile
+mkswap /swapfile
+swapon /swapfile
+echo "/swapfile none swap defaults 0 0" >> /etc/fstab
 
 # Connexion TTY automatique
 mkdir -p /etc/systemd/system/getty@tty1.service.d
@@ -216,14 +218,14 @@ CombinedUpgrade = true
 PARUCONF
 chown -R $USERNAME:$USERNAME /home/$USERNAME/.config/paru
 
-echo "[INFO] Compilation de paru depuis les sources (limité à 1 coeur pour éviter le Out of Memory)..."
-sudo -u $USERNAME bash -c "export CARGO_BUILD_JOBS=1; export MAKEFLAGS='-j1'; cd /tmp && git clone https://aur.archlinux.org/paru.git && cd paru && makepkg -si --noconfirm --skippgpcheck" || echo "[WARNING] Paru install failed"
+echo "[INFO] Compilation de paru depuis les sources (avec support swap)..."
+sudo -u $USERNAME bash -c "cd /tmp && git clone https://aur.archlinux.org/paru.git && cd paru && makepkg -si --noconfirm --skippgpcheck" || echo "[WARNING] Paru install failed"
 
 if ! command -v paru &> /dev/null; then
     echo "[ERROR] paru n'a pas pu être installé."
 else
-    echo "[INFO] Installation de ghostty et bluetui (limité à 1 coeur)..."
-    sudo -u $USERNAME bash -c "export CARGO_BUILD_JOBS=1; export MAKEFLAGS='-j1'; paru -S --noconfirm --skipreview ghostty-git bluetui" || echo "[WARNING] Erreur pendant l'install de ghostty/bluetui"
+    echo "[INFO] Installation de ghostty et bluetui (avec support swap)..."
+    sudo -u $USERNAME bash -c "paru -S --noconfirm --skipreview ghostty-git bluetui" || echo "[WARNING] Erreur pendant l'install de ghostty/bluetui"
 fi
 
 echo "[INFO] Restauration de la sécurité sudo..."
