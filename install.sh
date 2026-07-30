@@ -47,7 +47,7 @@ else
     PART_ROOT="${DISK}2"
 fi
 
-echo "[INFO] Nettoyage nucléaire de $DISK et démontage forcé..."
+echo "[INFO] Nettoyage nucléaire de $DISK..."
 
 # Sécurité : empêcher de formater le disque système ou le Live USB
 if findmnt --source "$DISK" -n -o TARGET > /dev/null 2>&1; then
@@ -58,24 +58,30 @@ if findmnt --source "$DISK" -n -o TARGET > /dev/null 2>&1; then
     fi
 fi
 
-# Démonter tout ce qui traîne
+# Démonter tout ce qui traîne sur /mnt et sur le disque cible
 umount -R /mnt 2>/dev/null
 umount -lf /mnt 2>/dev/null
-
-# Démonter les partitions du disque cible
 lsblk -lnpo NAME "$DISK" 2>/dev/null | xargs -I {} umount -lf {} 2>/dev/null
 
-# Arrêter les volumes chiffrés, LVM, et RAID
+# Arrêter les volumes chiffrés (LUKS), LVM, et RAID
 cryptsetup close --all 2>/dev/null
 vgchange -an 2>/dev/null
 mdadm --stop --scan 2>/dev/null
-swapoff -a 2>/dev/null
 dmsetup remove_all 2>/dev/null
+swapoff -a 2>/dev/null
 
-# Destruction totale des tables de partition
-echo "[INFO] Destruction des tables de partition..."
-sgdisk --zap-all "$DISK" 2>/dev/null
+# Nettoyer les signatures
 wipefs -a -f "$DISK" 2>/dev/null
+lsblk -lnpo NAME "$DISK" 2>/dev/null | xargs -I {} wipefs -a -f {} 2>/dev/null
+
+# Destruction des tables GPT et MBR avec sgdisk
+sgdisk --zap-all "$DISK" 2>/dev/null
+
+# Destruction physique (DD) du début et de la fin du disque pour forcer le noyau à tout oublier
+echo "[INFO] Effacement physique des données (DD)..."
+DISK_SIZE_SECTORS=$(blockdev --getsz "$DISK")
+dd if=/dev/zero of="$DISK" bs=1M count=10 conv=fsync oflag=direct 2>/dev/null
+dd if=/dev/zero of="$DISK" bs=512 count=10 seek=$((DISK_SIZE_SECTORS - 10)) conv=fsync oflag=direct 2>/dev/null
 
 # Forcer la relecture par le noyau
 partprobe "$DISK" 2>/dev/null
@@ -88,7 +94,7 @@ sgdisk -o "$DISK"
 sgdisk -n 1:0:+300M -t 1:ef00 "$DISK"
 sgdisk -n 2:0:0 -t 2:8300 "$DISK"
 
-# Attente critique pour que le noyau crée les partitions
+# Attente critique pour que le noyau crée les fichiers de périphériques
 partprobe "$DISK" 2>/dev/null
 udevadm settle
 sleep 3
@@ -102,10 +108,6 @@ echo "[OK] Partitions créées : EFI=$PART_EFI, ROOT=$PART_ROOT"
 
 # 5. Formatage et Montage BTRFS optimisé
 echo "[INFO] Formatage BTRFS et FAT32..."
-wipefs -a -f "$PART_EFI" 2>/dev/null
-wipefs -a -f "$PART_ROOT" 2>/dev/null
-sleep 1
-
 mkfs.fat -F32 "$PART_EFI"
 mkfs.btrfs -f "$PART_ROOT"
 
@@ -114,7 +116,7 @@ mkdir -p /mnt/boot
 mount "$PART_EFI" /mnt/boot
 
 # 6. Installation du système strict minimum et optimisé
-# AJOUT DE TOUTES LES DÉPENDANCES DE COMPILATION (pour ghostty, hyprland, paru)
+# Inclusion de TOUTES les dépendances de compilation pour Ghostty et Hyprland
 echo "[INFO] Installation des paquets officiels..."
 pacstrap /mnt --noconfirm base base-devel linux-zen linux-zen-headers linux-firmware btrfs-progs \
     networkmanager sudo git neovim curl wget unzip rsync \
@@ -241,14 +243,13 @@ PARUCONF
 chown -R $USERNAME:$USERNAME /home/$USERNAME/.config/paru
 
 echo "[INFO] Compilation de paru..."
-sudo -u $USERNAME bash -c "cd /tmp && git clone https://aur.archlinux.org/paru.git && cd paru && makepkg -si --noconfirm --skippgpcheck" || echo "[WARNING] Paru install failed"
+yes | sudo -u $USERNAME bash -c "cd /tmp && git clone https://aur.archlinux.org/paru.git && cd paru && makepkg -si --noconfirm --skippgpcheck" || echo "[WARNING] Paru install failed"
 
 if ! command -v paru &> /dev/null; then
     echo "[ERROR] paru n'a pas pu être installé. Ghostty ne sera pas installé."
 else
-    echo "[INFO] Installation de ghostty et bluetui (Cela peut prendre 10-20 minutes et beaucoup de RAM)..."
-    # --useask permet de mieux gérer les conflits de dépendances
-    sudo -u $USERNAME paru -S --noconfirm --skipreview --useask ghostty-git bluetui || echo "[WARNING] Erreur pendant l'install de ghostty/bluetui (Vérifiez votre RAM)"
+    echo "[INFO] Installation de ghostty et bluetui..."
+    yes | sudo -u $USERNAME paru -S --noconfirm --skipreview --useask ghostty-git bluetui || echo "[WARNING] Erreur pendant l'install de ghostty/bluetui"
 fi
 
 echo "[INFO] Restauration de la sécurité sudo..."
