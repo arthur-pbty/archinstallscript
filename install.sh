@@ -114,6 +114,10 @@ cat > /mnt/setup.sh << EOF
 #!/bin/bash
 set -e
 
+# Mise à jour complète du système pour avoir la bonne version de pacman/libalpm
+echo "[INFO] Mise à jour du système (pacman -Syu)..."
+pacman -Syu --noconfirm
+
 # Fuseau horaire
 ln -sf /usr/share/zoneinfo/Europe/Paris /etc/localtime
 hwclock --systohc
@@ -218,7 +222,6 @@ if ! command -v paru &> /dev/null; then
     echo "[ERROR] paru n'a pas pu être installé."
 else
     echo "[INFO] Installation de ghostty et bluetui (limitation a 1 coeur pour eviter le Out of Memory)..."
-    # Limiter Cargo et Make à 1 thread pour éviter l'OOM sur les petits PC portables
     sudo -u $USERNAME bash -c "export CARGO_BUILD_JOBS=1; export MAKEFLAGS='-j1'; paru -S --noconfirm --skipreview ghostty-git bluetui" || echo "[WARNING] Erreur pendant l'install de ghostty/bluetui"
 fi
 
