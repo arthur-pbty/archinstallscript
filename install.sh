@@ -114,7 +114,7 @@ cat > /mnt/setup.sh << EOF
 #!/bin/bash
 set -e
 
-# Mise à jour de la keyring et du système pour éviter les problèmes de dépendances
+# Mise à jour de la keyring et du système
 echo "[INFO] Mise à jour de la keyring et du système..."
 pacman -Sy --noconfirm archlinux-keyring
 pacman -Su --noconfirm
@@ -205,16 +205,16 @@ echo "[INFO] Configuration de sudo sans mot de passe temporaire..."
 echo "$USERNAME ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/temp
 chmod 0440 /etc/sudoers.d/temp
 
-# Préconfiguration de paru
+# Préconfiguration de paru (CORRECTION DES VALEURS yes/no)
 mkdir -p /home/$USERNAME/.config/paru
 cat << PARUCONF > /home/$USERNAME/.config/paru/paru.conf
 [options]
-SudoLoop = true
-SkipReview = true
-CleanAfter = true
-Provides = true
-PgpFetch = true
-CombinedUpgrade = true
+SudoLoop = yes
+SkipReview = yes
+CleanAfter = yes
+Provides = yes
+PgpFetch = yes
+CombinedUpgrade = yes
 PARUCONF
 chown -R $USERNAME:$USERNAME /home/$USERNAME/.config/paru
 
