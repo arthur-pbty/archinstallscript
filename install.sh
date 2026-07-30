@@ -10,7 +10,7 @@ ROOT_PASS="rootpassword123"
 HOSTNAME="arch-laptop"
 # ==============================================================================
 
-set -e
+# Ne pas utiliser set -e pour éviter que le script ne plante sur des avertissements (ex: umount)
 
 echo "=================================================="
 echo "   INSTALLATION ARCH LINUX + HYPRLAND (ZEN/OPTI)  "
@@ -56,40 +56,32 @@ if findmnt --source "$DISK" -n -o TARGET > /dev/null 2>&1; then
     MOUNT_TARGET=$(findmnt --source "$DISK" -n -o TARGET)
     if [[ "$MOUNT_TARGET" == "/" || "$MOUNT_TARGET" == "/run/archiso"* ]]; then
         echo "[ERROR] Le disque $DISK est actuellement utilisé par le système ($MOUNT_TARGET)."
-        echo "        Si tu es sur le Live USB, le disque cible n'est pas $DISK (vérifie avec lsblk)."
         exit 1
     fi
 fi
 
-# Démonter /mnt récursivement et de manière "paresseuse"
-umount -R /mnt 2>/dev/null || true
-umount -l /mnt 2>/dev/null || true
+# Démonter tout ce qui traîne
+umount -R /mnt 2>/dev/null
+umount -lf /mnt 2>/dev/null
 
-# Récupérer toutes les partitions du disque et les démonter de force
-PARTITIONS=$(lsblk -lnpo NAME "$DISK" 2>/dev/null)
-for part in $PARTITIONS; do
-    if findmnt --source "$part" -n -o TARGET > /dev/null 2>&1; then
-        echo "[INFO] Démontage forcé de $part..."
-        umount -lf "$part" 2>/dev/null || true
-    fi
-done
+# Démonter les partitions du disque cible
+lsblk -lnpo NAME "$DISK" 2>/dev/null | xargs -I {} umount -lf {} 2>/dev/null
 
-# Arrêt des volumes chiffrés, LVM, et RAID qui pourraient bloquer le disque
-cryptsetup close --all 2>/dev/null || true
-vgchange -an 2>/dev/null || true
-mdadm --stop --scan 2>/dev/null || true
+# Arrêter les volumes chiffrés, LVM, et RAID
+cryptsetup close --all 2>/dev/null
+vgchange -an 2>/dev/null
+mdadm --stop --scan 2>/dev/null
+swapoff -a 2>/dev/null
+dmsetup remove_all 2>/dev/null
 
-# Désactiver les swaps et les mappings
-swapoff -a 2>/dev/null || true
-dmsetup remove_all 2>/dev/null || true
+# Destruction totale des tables de partition (bien plus puissant que dd)
+echo "[INFO] Destruction des tables de partition..."
+sgdisk --zap-all "$DISK" 2>/dev/null
+wipefs -a -f "$DISK" 2>/dev/null
 
-# Nettoyer les signatures et détruire les tables avec sgdisk (plus propre que dd)
-echo "[INFO] Effacement des tables de partition..."
-sgdisk --zap-all "$DISK" 2>/dev/null || true
-
-# Forcer la relecture
-partprobe "$DISK" 2>/dev/null || true
-blockdev --rereadpt "$DISK" 2>/dev/null || true
+# Forcer la relecture par le noyau
+partprobe "$DISK" 2>/dev/null
+blockdev --rereadpt "$DISK" 2>/dev/null
 udevadm settle
 sleep 3
 
@@ -98,20 +90,25 @@ sgdisk -o "$DISK"
 sgdisk -n 1:0:+300M -t 1:ef00 "$DISK"
 sgdisk -n 2:0:0 -t 2:8300 "$DISK"
 
-partprobe "$DISK" 2>/dev/null || true
-blockdev --rereadpt "$DISK" 2>/dev/null || true
+# Attente critique pour que le noyau crée /dev/sda1 et /dev/sda2
+partprobe "$DISK" 2>/dev/null
 udevadm settle
 sleep 3
 
 if [ ! -b "$PART_EFI" ] || [ ! -b "$PART_ROOT" ]; then
-    echo "[ERROR] Les partitions $PART_EFI ou $PART_ROOT n'existent pas."
+    echo "[ERROR] Les partitions $PART_EFI ou $PART_ROOT n'existent pas après 3 secondes."
     lsblk
     exit 1
 fi
-echo "[OK] Partitions créées et détectées : EFI=$PART_EFI, ROOT=$PART_ROOT"
+echo "[OK] Partitions créées : EFI=$PART_EFI, ROOT=$PART_ROOT"
 
 # 5. Formatage et Montage BTRFS optimisé
-echo "[INFO] Formatage BTRFS avec compression ZSTD..."
+echo "[INFO] Formatage BTRFS et FAT32..."
+# On force le nettoyage des signatures juste avant le formatage pour éviter le "resource busy"
+wipefs -a -f "$PART_EFI" 2>/dev/null
+wipefs -a -f "$PART_ROOT" 2>/dev/null
+sleep 1
+
 mkfs.fat -F32 "$PART_EFI"
 mkfs.btrfs -f "$PART_ROOT"
 
@@ -121,7 +118,7 @@ mount "$PART_EFI" /mnt/boot
 
 # 6. Installation du système strict minimum et optimisé
 echo "[INFO] Installation des paquets officiels..."
-pacstrap --noconfirm /mnt base base-devel linux-zen linux-zen-headers linux-firmware btrfs-progs \
+pacstrap /mnt --noconfirm base base-devel linux-zen linux-zen-headers linux-firmware btrfs-progs \
     networkmanager sudo git neovim curl wget unzip rsync \
     $MICROCODE power-profiles-daemon thermald acpi acpid brightnessctl \
     pipewire pipewire-pulse pipewire-alsa pipewire-jack wireplumber \
@@ -140,7 +137,6 @@ genfstab -U /mnt >> /mnt/etc/fstab
 echo "[INFO] Configuration du système..."
 cat > /mnt/setup.sh << EOF
 #!/bin/bash
-set -e
 
 # Mise à jour de la keyring et du système
 echo "[INFO] Mise à jour de la keyring et du système..."
@@ -177,7 +173,7 @@ sed -i 's/^HOOKS=.*/HOOKS=(base systemd autodetect modconf block filesystems key
 sed -i 's/^#COMPRESSION="zstd"/COMPRESSION="zstd"/' /etc/mkinitcpio.conf
 mkinitcpio -P
 
-# Bootloader (systemd-boot) optimisé
+# Bootloader (systemd-boot)
 bootctl --path=/boot install
 cat << LOADERCONF > /boot/loader/loader.conf
 timeout 0
@@ -203,7 +199,7 @@ options root=UUID=\$ROOT_UUID rw rootflags=compress=zstd:1 quiet loglevel=3 rd.s
 ARCHOPTS
 bootctl update
 
-# Services modernes pour laptop
+# Services modernes
 systemctl enable NetworkManager
 systemctl enable power-profiles-daemon
 systemctl enable thermald
@@ -211,7 +207,7 @@ systemctl enable acpid
 systemctl enable bluetooth
 
 # Configuration SWAP (Fichier d'échange de 4 Go compatible BTRFS)
-echo "[INFO] Création d'un swapfile de 4Go pour éviter le Out of Memory..."
+echo "[INFO] Création d'un swapfile de 4Go..."
 truncate -s 0 /swapfile
 chattr +C /swapfile
 fallocate -l 4G /swapfile
@@ -228,12 +224,11 @@ ExecStart=
 ExecStart=-/usr/bin/agetty --autologin $USERNAME --noclear %I \$TERM
 GETTYCONF
 
-# Configuration AUR (paru) et optimisation RAM
+# Configuration AUR (paru)
 echo "[INFO] Configuration de sudo sans mot de passe temporaire..."
 echo "$USERNAME ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/temp
 chmod 0440 /etc/sudoers.d/temp
 
-# Préconfiguration de paru
 mkdir -p /home/$USERNAME/.config/paru
 cat << PARUCONF > /home/$USERNAME/.config/paru/paru.conf
 [options]
@@ -246,7 +241,7 @@ Makepkgflags = --noconfirm --skippgpcheck
 PARUCONF
 chown -R $USERNAME:$USERNAME /home/$USERNAME/.config/paru
 
-echo "[INFO] Compilation de paru depuis les sources..."
+echo "[INFO] Compilation de paru..."
 yes | sudo -u $USERNAME bash -c "cd /tmp && git clone https://aur.archlinux.org/paru.git && cd paru && makepkg -si --noconfirm --skippgpcheck" || echo "[WARNING] Paru install failed"
 
 if ! command -v paru &> /dev/null; then
@@ -593,7 +588,7 @@ EOF
 chmod +x /mnt/setup.sh
 arch-chroot /mnt /setup.sh
 
-# Nettoyage
+# Nettoyage final
 rm /mnt/setup.sh
 umount -R /mnt
 
