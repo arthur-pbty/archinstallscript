@@ -434,7 +434,6 @@ hl.config({
         sensitivity = 0,
         touchpad = {
             natural_scroll = true,
-            tap-to-click = true,
         },
     },
 })
@@ -527,7 +526,7 @@ HYPRCONF
 cat << 'BASHPROFILE' > \$USER_HOME/.bash_profile
 if [ -z "\${WAYLAND_DISPLAY}" ] && [ "\${XDG_VTNR}" -eq 1 ]; then
     while true; do
-        read -s -p "Entrez votre mot de passe pour demarrer Hyprland: " PASS
+        read -s -p "Mot de passe: " PASS
         echo ""
         if echo "\$PASS" | sudo -S -k true 2>/dev/null; then
             exec Hyprland
