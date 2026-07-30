@@ -50,18 +50,33 @@ else
 fi
 
 echo "[INFO] Nettoyage nucléaire de $DISK et démontage forcé..."
-umount -R /mnt 2>/dev/null || true
-umount ${DISK}* 2>/dev/null || true
+# Tuer tous les processus qui pourraient utiliser /mnt
+fuser -km /mnt 2>/dev/null || true
+sleep 1
+
+# Démonter /mnt et /mnt/boot explicitement
+umount /mnt/boot 2>/dev/null || true
+umount /mnt 2>/dev/null || true
+
+# Boucler pour démonter TOUTES les partitions du disque cible
+for part in ${DISK}*; do
+    umount "$part" 2>/dev/null || true
+done
+
+# Désactiver les swaps et les mappings
 swapoff -a 2>/dev/null || true
 dmsetup remove_all 2>/dev/null || true
 
+# Nettoyer les signatures
 wipefs -a -f "$DISK"* 2>/dev/null || true
 wipefs -a -f "$DISK" 2>/dev/null || true
 
+# Détruire physiquement les tables GPT
 dd if=/dev/zero of="$DISK" bs=1M count=10 conv=fsync 2>/dev/null || true
 DISK_SIZE_SECTORS=$(blockdev --getsz "$DISK")
 dd if=/dev/zero of="$DISK" bs=512 count=10 seek=$((DISK_SIZE_SECTORS - 10)) conv=fsync 2>/dev/null || true
 
+# Forcer la relecture
 partprobe "$DISK" 2>/dev/null || true
 blockdev --rereadpt "$DISK" 2>/dev/null || true
 udevadm settle
@@ -219,7 +234,6 @@ PARUCONF
 chown -R $USERNAME:$USERNAME /home/$USERNAME/.config/paru
 
 echo "[INFO] Compilation de paru depuis les sources (avec support swap)..."
-# Redirection de stdin depuis /dev/null pour éviter les boucles interactives
 sudo -u $USERNAME bash -c "cd /tmp && git clone https://aur.archlinux.org/paru.git && cd paru && makepkg -si --noconfirm --skippgpcheck" < /dev/null || echo "[WARNING] Paru install failed"
 
 if ! command -v paru &> /dev/null; then
