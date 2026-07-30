@@ -38,7 +38,7 @@ echo "[INFO] Préparation du système..."
 timedatectl set-ntp true
 pacman -Syy --noconfirm
 
-# 4. Nettoyage nucléaire et Partitionnement
+# 4. Nettoyage nucléaire et Partitionnement (VERSION BULLETPROOF)
 if [[ $DISK == *"nvme"* ]] || [[ $DISK == *"mmcblk"* ]]; then
     PART_EFI="${DISK}p1"
     PART_ROOT="${DISK}p2"
@@ -46,8 +46,6 @@ else
     PART_EFI="${DISK}1"
     PART_ROOT="${DISK}2"
 fi
-
-echo "[INFO] Nettoyage nucléaire de $DISK..."
 
 # Sécurité ultime : Vérifier si le disque cible n'est pas le Live USB ou un disque système monté
 if findmnt --source "$DISK" -n -o TARGET > /dev/null 2>&1; then
@@ -57,56 +55,77 @@ if findmnt --source "$DISK" -n -o TARGET > /dev/null 2>&1; then
     exit 1
 fi
 
-# Démonter tout ce qui traîne
+echo "[INFO] Nettoyage nucléaire et préparation de $DISK..."
+
+# Démonter dynamiquement TOUTES les partitions existantes sur ce disque
+echo "[INFO] Démontage des partitions existantes..."
+lsblk -lnpo NAME,MOUNTPOINT "$DISK" | awk '$2 != "" {print $1}' | xargs -I {} umount -lf {} 2>/dev/null
 umount -R /mnt 2>/dev/null
 umount -lf /mnt 2>/dev/null
-lsblk -lnpo NAME "$DISK" 2>/dev/null | xargs -I {} umount -lf {} 2>/dev/null
 
 # Tuer de force tous les processus qui utilisent le disque ou ses partitions
+echo "[INFO] Terminaison des processus utilisant le disque..."
 fuser -ck "$DISK" 2>/dev/null
-fuser -ck "$PART_EFI" 2>/dev/null
-fuser -ck "$PART_ROOT" 2>/dev/null
+lsblk -lnpo NAME "$DISK" | xargs -I {} fuser -ck {} 2>/dev/null
 
 # Arrêter les volumes chiffrés, LVM, et RAID
-cryptsetup close --all 2>/dev/null
+echo "[INFO] Désactivation de LVM, LUKS, RAID et Swap..."
 vgchange -an 2>/dev/null
+cryptsetup close --all 2>/dev/null
 mdadm --stop --scan 2>/dev/null
 dmsetup remove_all 2>/dev/null
 swapoff -a 2>/dev/null
 
-# Nettoyer les signatures
-wipefs -a -f "$DISK"* 2>/dev/null
-wipefs -a -f "$DISK" 2>/dev/null
-sgdisk --zap-all "$DISK" 2>/dev/null
+# Nettoyer les signatures RAID (superblocks) sur le disque et ses partitions
+echo "[INFO] Effacement des superblocks RAID..."
+mdadm --zero-superblock "$DISK" 2>/dev/null
+lsblk -lnpo NAME "$DISK" | xargs -I {} mdadm --zero-superblock {} 2>/dev/null
 
-# Destruction physique ciblée (DD) du début, de la fin et des partitions spécifiques
-echo "[INFO] Effacement physique des données (DD)..."
-DISK_SIZE_SECTORS=$(blockdev --getsz "$DISK")
-dd if=/dev/zero of="$DISK" bs=1M count=10 conv=fsync oflag=direct 2>/dev/null
-dd if=/dev/zero of="$DISK" bs=512 count=10 seek=$((DISK_SIZE_SECTORS - 10)) conv=fsync oflag=direct 2>/dev/null
+# Nettoyer toutes les signatures de systèmes de fichiers
+echo "[INFO] Nettoyage des signatures de systèmes de fichiers..."
+wipefs -a -f "$DISK" 2>/dev/null
+lsblk -lnpo NAME "$DISK" | xargs -I {} wipefs -a -f {} 2>/dev/null
+
+# Zapping complet de la table de partitions (GPT et MBR)
+sgdisk --zap-all "$DISK"
+sgdisk -o "$DISK"
+
+# Destruction physique ciblée : SSD (blkdiscard) vs HDD (DD)
+if lsblk -dno ROTA "$DISK" | grep -q "^0$"; then
+    echo "[INFO] SSD/NVMe détecté : TRIM complet (blkdiscard) pour un nettoyage parfait et instantané..."
+    blkdiscard -f "$DISK"
+else
+    echo "[INFO] Disque mécanique (HDD) détecté : Effacement physique du début et de la fin du disque (DD)..."
+    DISK_SIZE_SECTORS=$(blockdev --getsz "$DISK")
+    dd if=/dev/zero of="$DISK" bs=1M count=10 conv=fsync oflag=direct status=none
+    dd if=/dev/zero of="$DISK" bs=512 count=10 seek=$((DISK_SIZE_SECTORS - 10)) conv=fsync oflag=direct status=none
+fi
 
 # Forcer la relecture par le noyau
-partprobe "$DISK" 2>/dev/null
-blockdev --rereadpt "$DISK" 2>/dev/null
+echo "[INFO] Synchronisation du noyau..."
+partprobe "$DISK"
+blockdev --rereadpt "$DISK"
 udevadm settle
-sleep 3
 
 echo "[INFO] Création des nouvelles partitions sur $DISK..."
-sgdisk -o "$DISK"
 sgdisk -n 1:0:+300M -t 1:ef00 "$DISK"
 sgdisk -n 2:0:0 -t 2:8300 "$DISK"
 
-# Attente critique pour que le noyau crée les fichiers de périphériques
-partprobe "$DISK" 2>/dev/null
-udevadm settle
-sleep 3
+# Attente critique et ROBUSTE pour que le noyau crée les fichiers de périphériques
+echo "[INFO] Attente de la création des nœuds de périphériques..."
+for i in {1..10}; do
+    if [ -b "$PART_EFI" ] && [ -b "$PART_ROOT" ]; then
+        break
+    fi
+    sleep 1
+done
 
 if [ ! -b "$PART_EFI" ] || [ ! -b "$PART_ROOT" ]; then
-    echo "[ERROR] Les partitions $PART_EFI ou $PART_ROOT n'existent pas."
+    echo "[ERROR] Les partitions $PART_EFI ou $PART_ROOT n'existent pas après 10 secondes."
     lsblk
     exit 1
 fi
-echo "[OK] Partitions créées : EFI=$PART_EFI, ROOT=$PART_ROOT"
+echo "[OK] Partitions créées et détectées : EFI=$PART_EFI, ROOT=$PART_ROOT"
 
 # 5. Formatage et Montage BTRFS optimisé
 echo "[INFO] Formatage BTRFS et FAT32..."
@@ -114,9 +133,6 @@ echo "[INFO] Formatage BTRFS et FAT32..."
 # Nettoyage chirurgical des partitions spécifiques juste avant le formatage
 wipefs -a -f "$PART_EFI" 2>/dev/null
 wipefs -a -f "$PART_ROOT" 2>/dev/null
-dd if=/dev/zero of="$PART_ROOT" bs=1M count=5 conv=fsync oflag=direct 2>/dev/null
-dd if=/dev/zero of="$PART_EFI" bs=1M count=2 conv=fsync oflag=direct 2>/dev/null
-sleep 2
 
 mkfs.fat -F32 "$PART_EFI"
 mkfs.btrfs -f "$PART_ROOT"
