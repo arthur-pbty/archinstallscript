@@ -49,8 +49,11 @@ else
     PART_ROOT="${DISK}2"
 fi
 
-echo "[INFO] Nettoyage nucléaire de $DISK..."
+echo "[INFO] Nettoyage nucléaire de $DISK et démontage forcé..."
+# Démonter /mnt récursivement au cas où une ancienne install aurait planté
 umount -R /mnt 2>/dev/null || true
+# Forcer le démontage des partitions spécifiques du disque cible
+umount ${DISK}* 2>/dev/null || true
 swapoff -a 2>/dev/null || true
 dmsetup remove_all 2>/dev/null || true
 
@@ -205,7 +208,7 @@ echo "[INFO] Configuration de sudo sans mot de passe temporaire..."
 echo "$USERNAME ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/temp
 chmod 0440 /etc/sudoers.d/temp
 
-# Préconfiguration de paru (CORRECTION DES VALEURS yes/no)
+# Préconfiguration de paru
 mkdir -p /home/$USERNAME/.config/paru
 cat << PARUCONF > /home/$USERNAME/.config/paru/paru.conf
 [options]
