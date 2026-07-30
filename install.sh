@@ -1,3 +1,10 @@
+Le compilateur Rust (utilisé pour compiler `paru`) est célèbre pour consommer énormément de RAM. Sur un PC portable avec 4 ou 8 Go de RAM, le noyau Linux tue le processus (OOM Killer) pour protéger le système.
+
+Pour régler ce problème définitivement, j'ai ajouté la création d'un **fichier d'échange (Swap) de 4 Go** juste avant la compilation, ce qui donnera de la marge au système. De plus, j'ai remplacé `paru` par `paru-bin` (une version précompilée), ce qui évite de compiler Rust et rend l'installation instantanée.
+
+Voici le script corrigé (sans emoji) :
+
+```bash
 #!/bin/bash
 
 # ==============================================================================
@@ -184,13 +191,21 @@ ExecStart=
 ExecStart=-/usr/bin/agetty --autologin $USERNAME --noclear %I \$TERM
 GETTYCONF
 
-# Configuration AUR (paru) et mots de passe automatisés
+# Création d'un fichier SWAP de 4 Go (pour éviter le crash OOM pendant les compilations)
+echo "[INFO] Création d'un swapfile de 4Go..."
+fallocate -l 4G /swapfile
+chmod 600 /swapfile
+mkswap /swapfile
+swapon /swapfile
+echo "/swapfile none swap defaults 0 0" >> /etc/fstab
+
+# Configuration AUR (paru-bin) et mots de passe automatisés
 echo "[INFO] Configuration de sudo sans mot de passe temporaire pour l'installation AUR..."
 echo "$USERNAME ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/temp
 chmod 0440 /etc/sudoers.d/temp
 
-echo "[INFO] Installation de paru et ghostty..."
-sudo -u $USERNAME bash -c "cd /tmp && git clone https://aur.archlinux.org/paru.git && cd paru && makepkg -si --noconfirm"
+echo "[INFO] Installation de paru-bin (évite de compiler Rust) et autres outils AUR..."
+sudo -u $USERNAME bash -c "cd /tmp && git clone https://aur.archlinux.org/paru-bin.git && cd paru-bin && makepkg -si --noconfirm"
 sudo -u $USERNAME bash -c "paru -S --noconfirm ghostty-git bluetui || true"
 
 echo "[INFO] Restauration de la sécurité sudo..."
@@ -549,3 +564,4 @@ echo "=================================================="
 echo "Redémarrage dans 3 secondes..."
 sleep 3
 reboot
+```
