@@ -70,12 +70,13 @@ mdadm --stop --scan 2>/dev/null
 dmsetup remove_all 2>/dev/null
 swapoff -a 2>/dev/null
 
-# Nettoyer les signatures
-wipefs -a -f "$DISK"* 2>/dev/null
-wipefs -a -f "$DISK" 2>/dev/null
-
-# Destruction des tables GPT et MBR
-sgdisk --zap-all "$DISK" 2>/dev/null
+# Nettoyer les signatures avec boucle de réessai (pour les BIOS Dell récalcitrants)
+for i in {1..3}; do
+    wipefs -a -f "$DISK"* 2>/dev/null
+    wipefs -a -f "$DISK" 2>/dev/null
+    sgdisk --zap-all "$DISK" 2>/dev/null
+    sleep 1
+done
 
 # Destruction physique (DD) du début et de la fin du disque
 echo "[INFO] Effacement physique des données (DD)..."
@@ -87,7 +88,7 @@ dd if=/dev/zero of="$DISK" bs=512 count=10 seek=$((DISK_SIZE_SECTORS - 10)) conv
 partprobe "$DISK" 2>/dev/null
 blockdev --rereadpt "$DISK" 2>/dev/null
 udevadm settle
-sleep 3
+sleep 5
 
 echo "[INFO] Création des nouvelles partitions sur $DISK..."
 sgdisk -o "$DISK"
@@ -97,7 +98,7 @@ sgdisk -n 2:0:0 -t 2:8300 "$DISK"
 # Attente critique pour que le noyau crée les fichiers de périphériques
 partprobe "$DISK" 2>/dev/null
 udevadm settle
-sleep 3
+sleep 5
 
 if [ ! -b "$PART_EFI" ] || [ ! -b "$PART_ROOT" ]; then
     echo "[ERROR] Les partitions $PART_EFI ou $PART_ROOT n'existent pas."
@@ -116,9 +117,9 @@ mkdir -p /mnt/boot
 mount "$PART_EFI" /mnt/boot
 
 # 6. Installation du système strict minimum et optimisé
-# CORRECTION : Ajout de "yes |" et "--noconfirm" à la fin pour éviter le blocage
+# CORRECTION MAJEURE : --noconfirm est placé JUSTE APRÈS pacstrap
 echo "[INFO] Installation des paquets officiels..."
-yes | pacstrap /mnt base base-devel linux-zen linux-zen-headers linux-firmware btrfs-progs \
+pacstrap --noconfirm /mnt base base-devel linux-zen linux-zen-headers linux-firmware btrfs-progs \
     networkmanager sudo git neovim curl wget unzip rsync \
     $MICROCODE power-profiles-daemon thermald acpi acpid brightnessctl \
     pipewire pipewire-pulse pipewire-alsa pipewire-jack wireplumber \
@@ -128,7 +129,7 @@ yes | pacstrap /mnt base base-devel linux-zen linux-zen-headers linux-firmware b
     fastfetch btop htop ncdu yazi lazygit \
     rust cargo go zig wayland-protocols scdoc \
     fontconfig freetype2 harfbuzz libxkbcommon pkgconf \
-    cmake ninja gcc make gnupg pacman-contrib xcb-util xcb-util-cursor xcb-util-wm xcb-util-keysyms --noconfirm
+    cmake ninja gcc make gnupg pacman-contrib xcb-util xcb-util-cursor xcb-util-wm xcb-util-keysyms
 
 # 7. Génération fstab optimisée
 echo "[INFO] Génération du fstab..."
