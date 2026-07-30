@@ -50,26 +50,44 @@ else
 fi
 
 echo "[INFO] Nettoyage nucléaire de $DISK et démontage forcé..."
-fuser -km /mnt 2>/dev/null || true
-sleep 1
 
+# Sécurité : empêcher de formater le disque système ou le Live USB
+if findmnt --source "$DISK" -n -o TARGET > /dev/null 2>&1; then
+    MOUNT_TARGET=$(findmnt --source "$DISK" -n -o TARGET)
+    if [[ "$MOUNT_TARGET" == "/" || "$MOUNT_TARGET" == "/run/archiso"* ]]; then
+        echo "[ERROR] Le disque $DISK est actuellement utilisé par le système ($MOUNT_TARGET)."
+        echo "        Si tu es sur le Live USB, le disque cible n'est pas $DISK (vérifie avec lsblk)."
+        exit 1
+    fi
+fi
+
+# Démonter /mnt récursivement et de manière "paresseuse"
 umount -R /mnt 2>/dev/null || true
 umount -l /mnt 2>/dev/null || true
 
-for part in ${DISK}*; do
-    umount -l "$part" 2>/dev/null || true
+# Récupérer toutes les partitions du disque et les démonter de force
+PARTITIONS=$(lsblk -lnpo NAME "$DISK" 2>/dev/null)
+for part in $PARTITIONS; do
+    if findmnt --source "$part" -n -o TARGET > /dev/null 2>&1; then
+        echo "[INFO] Démontage forcé de $part..."
+        umount -lf "$part" 2>/dev/null || true
+    fi
 done
 
+# Arrêt des volumes chiffrés, LVM, et RAID qui pourraient bloquer le disque
+cryptsetup close --all 2>/dev/null || true
+vgchange -an 2>/dev/null || true
+mdadm --stop --scan 2>/dev/null || true
+
+# Désactiver les swaps et les mappings
 swapoff -a 2>/dev/null || true
 dmsetup remove_all 2>/dev/null || true
 
-wipefs -a -f "$DISK"* 2>/dev/null || true
-wipefs -a -f "$DISK" 2>/dev/null || true
+# Nettoyer les signatures et détruire les tables avec sgdisk (plus propre que dd)
+echo "[INFO] Effacement des tables de partition..."
+sgdisk --zap-all "$DISK" 2>/dev/null || true
 
-dd if=/dev/zero of="$DISK" bs=1M count=10 conv=fsync 2>/dev/null || true
-DISK_SIZE_SECTORS=$(blockdev --getsz "$DISK")
-dd if=/dev/zero of="$DISK" bs=512 count=10 seek=$((DISK_SIZE_SECTORS - 10)) conv=fsync 2>/dev/null || true
-
+# Forcer la relecture
 partprobe "$DISK" 2>/dev/null || true
 blockdev --rereadpt "$DISK" 2>/dev/null || true
 udevadm settle
@@ -103,7 +121,7 @@ mount "$PART_EFI" /mnt/boot
 
 # 6. Installation du système strict minimum et optimisé
 echo "[INFO] Installation des paquets officiels..."
-pacstrap /mnt base base-devel linux-zen linux-zen-headers linux-firmware btrfs-progs \
+pacstrap --noconfirm /mnt base base-devel linux-zen linux-zen-headers linux-firmware btrfs-progs \
     networkmanager sudo git neovim curl wget unzip rsync \
     $MICROCODE power-profiles-daemon thermald acpi acpid brightnessctl \
     pipewire pipewire-pulse pipewire-alsa pipewire-jack wireplumber \
@@ -229,14 +247,12 @@ PARUCONF
 chown -R $USERNAME:$USERNAME /home/$USERNAME/.config/paru
 
 echo "[INFO] Compilation de paru depuis les sources..."
-# CORRECTION: yes | au lieu de < /dev/null pour répondre aux prompts
 yes | sudo -u $USERNAME bash -c "cd /tmp && git clone https://aur.archlinux.org/paru.git && cd paru && makepkg -si --noconfirm --skippgpcheck" || echo "[WARNING] Paru install failed"
 
 if ! command -v paru &> /dev/null; then
     echo "[ERROR] paru n'a pas pu être installé."
 else
     echo "[INFO] Installation de ghostty et bluetui..."
-    # CORRECTION: yes | au lieu de < /dev/null
     yes | sudo -u $USERNAME bash -c "paru -S --noconfirm --skipreview ghostty-git bluetui" || echo "[WARNING] Erreur pendant l'install de ghostty/bluetui"
 fi
 
