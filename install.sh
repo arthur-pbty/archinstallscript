@@ -102,7 +102,7 @@ pacstrap /mnt base base-devel linux-zen linux-zen-headers linux-firmware btrfs-p
     hyprland wofi waybar swaybg ttf-jetbrains-mono-nerd kitty \
     bluez bluez-utils thunar playerctl \
     fastfetch btop htop ncdu yazi lazygit zram-generator \
-    fontconfig freetype2 harfbuzz libxkbcommon pkgconf
+    rust cargo go fontconfig freetype2 harfbuzz libxkbcommon pkgconf
 
 # 7. Génération fstab optimisée
 echo "[INFO] Génération du fstab..."
@@ -193,19 +193,32 @@ ExecStart=
 ExecStart=-/usr/bin/agetty --autologin $USERNAME --noclear %I \$TERM
 GETTYCONF
 
-# Configuration AUR (paru-bin) et mots de passe automatisés
+# Configuration AUR (paru) et mots de passe automatisés
 echo "[INFO] Configuration de sudo sans mot de passe temporaire pour l'installation AUR..."
 echo "$USERNAME ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/temp
 chmod 0440 /etc/sudoers.d/temp
 
-echo "[INFO] Installation de paru-bin via su - (plus fiable en chroot)..."
-su - $USERNAME -c "cd /tmp && git clone https://aur.archlinux.org/paru-bin.git && cd paru-bin && makepkg -si --noconfirm" 2>&1 | tee /tmp/paru_install.log
+# Préconfiguration de paru pour éviter les blocages interactifs (Review)
+mkdir -p /home/$USERNAME/.config/paru
+cat << PARUCONF > /home/$USERNAME/.config/paru/paru.conf
+[options]
+SudoLoop = true
+SkipReview = true
+CleanAfter = true
+Provides = true
+PgpFetch = true
+CombinedUpgrade = true
+PARUCONF
+chown -R $USERNAME:$USERNAME /home/$USERNAME/.config/paru
+
+echo "[INFO] Compilation et installation de paru depuis les sources..."
+sudo -u $USERNAME bash -c "cd /tmp && git clone https://aur.archlinux.org/paru.git && cd paru && makepkg -si --noconfirm --skippgpcheck" 2>&1 | tee /tmp/paru_install.log
 
 if ! command -v paru &> /dev/null; then
     echo "[WARNING] paru n'a pas pu être installé. Vérifie le log : /tmp/paru_install.log"
 else
     echo "[INFO] Installation de ghostty et bluetui..."
-    su - $USERNAME -c "paru -S --noconfirm ghostty-git bluetui" 2>&1 | tee /tmp/aur_install.log || echo "[WARNING] Erreur pendant l'install de ghostty/bluetui"
+    sudo -u $USERNAME bash -c "paru -S --noconfirm --skipreview ghostty-git bluetui" 2>&1 | tee /tmp/aur_install.log || echo "[WARNING] Erreur pendant l'install de ghostty/bluetui"
 fi
 
 echo "[INFO] Restauration de la sécurité sudo..."
