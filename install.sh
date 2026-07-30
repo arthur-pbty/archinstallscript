@@ -49,19 +49,23 @@ fi
 
 echo "[INFO] Nettoyage nucléaire de $DISK..."
 
-# Sécurité : empêcher de formater le disque système ou le Live USB
+# Sécurité ultime : Vérifier si le disque cible n'est pas le Live USB ou un disque système monté
 if findmnt --source "$DISK" -n -o TARGET > /dev/null 2>&1; then
-    MOUNT_TARGET=$(findmnt --source "$DISK" -n -o TARGET)
-    if [[ "$MOUNT_TARGET" == "/" || "$MOUNT_TARGET" == "/run/archiso"* ]]; then
-        echo "[ERROR] Le disque $DISK est actuellement utilisé par le système ($MOUNT_TARGET)."
-        exit 1
-    fi
+    echo "[ERROR] Le disque $DISK est actuellement monté et utilisé par le système !"
+    echo "        Si tu es sur le Live USB, ton disque cible n'est pas $DISK."
+    echo "        Tape 'lsblk' pour trouver le bon disque (ex: /dev/nvme0n1 ou /dev/sdb)."
+    exit 1
 fi
 
 # Démonter tout ce qui traîne
 umount -R /mnt 2>/dev/null
 umount -lf /mnt 2>/dev/null
 lsblk -lnpo NAME "$DISK" 2>/dev/null | xargs -I {} umount -lf {} 2>/dev/null
+
+# Tuer de force tous les processus qui utilisent le disque ou ses partitions
+fuser -ck "$DISK" 2>/dev/null
+fuser -ck "$PART_EFI" 2>/dev/null
+fuser -ck "$PART_ROOT" 2>/dev/null
 
 # Arrêter les volumes chiffrés, LVM, et RAID
 cryptsetup close --all 2>/dev/null
@@ -70,15 +74,12 @@ mdadm --stop --scan 2>/dev/null
 dmsetup remove_all 2>/dev/null
 swapoff -a 2>/dev/null
 
-# Nettoyer les signatures avec boucle de réessai (pour les BIOS Dell récalcitrants)
-for i in {1..3}; do
-    wipefs -a -f "$DISK"* 2>/dev/null
-    wipefs -a -f "$DISK" 2>/dev/null
-    sgdisk --zap-all "$DISK" 2>/dev/null
-    sleep 1
-done
+# Nettoyer les signatures
+wipefs -a -f "$DISK"* 2>/dev/null
+wipefs -a -f "$DISK" 2>/dev/null
+sgdisk --zap-all "$DISK" 2>/dev/null
 
-# Destruction physique (DD) du début et de la fin du disque
+# Destruction physique ciblée (DD) du début, de la fin et des partitions spécifiques
 echo "[INFO] Effacement physique des données (DD)..."
 DISK_SIZE_SECTORS=$(blockdev --getsz "$DISK")
 dd if=/dev/zero of="$DISK" bs=1M count=10 conv=fsync oflag=direct 2>/dev/null
@@ -88,7 +89,7 @@ dd if=/dev/zero of="$DISK" bs=512 count=10 seek=$((DISK_SIZE_SECTORS - 10)) conv
 partprobe "$DISK" 2>/dev/null
 blockdev --rereadpt "$DISK" 2>/dev/null
 udevadm settle
-sleep 5
+sleep 3
 
 echo "[INFO] Création des nouvelles partitions sur $DISK..."
 sgdisk -o "$DISK"
@@ -98,7 +99,7 @@ sgdisk -n 2:0:0 -t 2:8300 "$DISK"
 # Attente critique pour que le noyau crée les fichiers de périphériques
 partprobe "$DISK" 2>/dev/null
 udevadm settle
-sleep 5
+sleep 3
 
 if [ ! -b "$PART_EFI" ] || [ ! -b "$PART_ROOT" ]; then
     echo "[ERROR] Les partitions $PART_EFI ou $PART_ROOT n'existent pas."
@@ -109,6 +110,14 @@ echo "[OK] Partitions créées : EFI=$PART_EFI, ROOT=$PART_ROOT"
 
 # 5. Formatage et Montage BTRFS optimisé
 echo "[INFO] Formatage BTRFS et FAT32..."
+
+# Nettoyage chirurgical des partitions spécifiques juste avant le formatage
+wipefs -a -f "$PART_EFI" 2>/dev/null
+wipefs -a -f "$PART_ROOT" 2>/dev/null
+dd if=/dev/zero of="$PART_ROOT" bs=1M count=5 conv=fsync oflag=direct 2>/dev/null
+dd if=/dev/zero of="$PART_EFI" bs=1M count=2 conv=fsync oflag=direct 2>/dev/null
+sleep 2
+
 mkfs.fat -F32 "$PART_EFI"
 mkfs.btrfs -f "$PART_ROOT"
 
@@ -117,7 +126,6 @@ mkdir -p /mnt/boot
 mount "$PART_EFI" /mnt/boot
 
 # 6. Installation du système strict minimum et optimisé
-# CORRECTION MAJEURE : --noconfirm est placé JUSTE APRÈS pacstrap
 echo "[INFO] Installation des paquets officiels..."
 pacstrap --noconfirm /mnt base base-devel linux-zen linux-zen-headers linux-firmware btrfs-progs \
     networkmanager sudo git neovim curl wget unzip rsync \
