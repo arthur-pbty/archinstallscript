@@ -177,7 +177,7 @@ systemctl enable thermald
 systemctl enable acpid
 systemctl enable bluetooth
 
-# Configuration ZRAM (Swap dans la RAM, beaucoup plus stable que swapfile sur BTRFS)
+# Configuration ZRAM
 cat << ZRAMCONF > /etc/systemd/zram-generator.conf
 [zram0]
 zram-size = ram / 2
@@ -185,7 +185,7 @@ swap-priority = 100
 fs-type = swap
 ZRAMCONF
 
-# Connexion TTY automatique (demande juste le mot de passe)
+# Connexion TTY automatique
 mkdir -p /etc/systemd/system/getty@tty1.service.d
 cat << GETTYCONF > /etc/systemd/system/getty@tty1.service.d/override.conf
 [Service]
@@ -193,12 +193,12 @@ ExecStart=
 ExecStart=-/usr/bin/agetty --autologin $USERNAME --noclear %I \$TERM
 GETTYCONF
 
-# Configuration AUR (paru) et mots de passe automatisés
-echo "[INFO] Configuration de sudo sans mot de passe temporaire pour l'installation AUR..."
+# Configuration AUR (paru-bin) et optimisation RAM
+echo "[INFO] Configuration de sudo sans mot de passe temporaire..."
 echo "$USERNAME ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/temp
 chmod 0440 /etc/sudoers.d/temp
 
-# Préconfiguration de paru pour éviter les blocages interactifs (Review)
+# Préconfiguration de paru
 mkdir -p /home/$USERNAME/.config/paru
 cat << PARUCONF > /home/$USERNAME/.config/paru/paru.conf
 [options]
@@ -211,14 +211,15 @@ CombinedUpgrade = true
 PARUCONF
 chown -R $USERNAME:$USERNAME /home/$USERNAME/.config/paru
 
-echo "[INFO] Compilation et installation de paru depuis les sources..."
-sudo -u $USERNAME bash -c "cd /tmp && git clone https://aur.archlinux.org/paru.git && cd paru && makepkg -si --noconfirm --skippgpcheck" 2>&1 | tee /tmp/paru_install.log
+echo "[INFO] Installation de paru-bin (evite le Out of Memory)..."
+sudo -u $USERNAME bash -c "cd /tmp && git clone https://aur.archlinux.org/paru-bin.git && cd paru-bin && makepkg -si --noconfirm" || echo "[WARNING] Paru install failed"
 
 if ! command -v paru &> /dev/null; then
-    echo "[WARNING] paru n'a pas pu être installé. Vérifie le log : /tmp/paru_install.log"
+    echo "[ERROR] paru n'a pas pu être installé."
 else
-    echo "[INFO] Installation de ghostty et bluetui..."
-    sudo -u $USERNAME bash -c "paru -S --noconfirm --skipreview ghostty-git bluetui" 2>&1 | tee /tmp/aur_install.log || echo "[WARNING] Erreur pendant l'install de ghostty/bluetui"
+    echo "[INFO] Installation de ghostty et bluetui (limitation a 1 coeur pour eviter le Out of Memory)..."
+    # Limiter Cargo et Make à 1 thread pour éviter l'OOM sur les petits PC portables
+    sudo -u $USERNAME bash -c "export CARGO_BUILD_JOBS=1; export MAKEFLAGS='-j1'; paru -S --noconfirm --skipreview ghostty-git bluetui" || echo "[WARNING] Erreur pendant l'install de ghostty/bluetui"
 fi
 
 echo "[INFO] Restauration de la sécurité sudo..."
@@ -229,10 +230,8 @@ USER_HOME="/home/$USERNAME"
 mkdir -p \$USER_HOME/.config/hypr
 mkdir -p \$USER_HOME/.config/waybar
 
-# Suppression de l'ancien fichier si existe
 rm -f \$USER_HOME/.config/hypr/hyprland.conf
 
-# Création de la configuration Waybar (Verticale gauche, fond noir)
 cat << 'WAYBARCONF' > \$USER_HOME/.config/waybar/config
 {
     "layer": "top",
@@ -301,7 +300,6 @@ window#waybar {
 }
 WAYBARCSS
 
-# Création de la configuration Hyprland (Format Lua)
 cat << 'HYPRCONF' > \$USER_HOME/.config/hypr/hyprland.lua
 -- This is an example Hyprland Lua config file.
 -- Refer to the wiki for more information.
@@ -311,7 +309,6 @@ cat << 'HYPRCONF' > \$USER_HOME/.config/hypr/hyprland.lua
 ---- MONITORS ----
 ------------------
 
--- See https://wiki.hypr.land/Configuring/Basics/Monitors/
 hl.monitor({
     output   = "",
     mode     = "preferred",
@@ -540,7 +537,6 @@ hl.window_rule({
 })
 HYPRCONF
 
-# Lancement auto de Hyprland sur TTY1 (demande le mot de passe avant)
 cat << 'BASHPROFILE' > \$USER_HOME/.bash_profile
 if [ -z "\${WAYLAND_DISPLAY}" ] && [ "\${XDG_VTNR}" -eq 1 ]; then
     while true; do
