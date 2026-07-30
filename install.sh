@@ -3,10 +3,10 @@
 # ==============================================================================
 # CONFIGURATION OBLIGATOIRE (À REMPLIR AVANT DE LANCER LE SCRIPT)
 # ==============================================================================
-DISK="/dev/sda"             # Disque cible (ex: /dev/sda ou /dev/nvme0n1)
-USERNAME="archuser"         # Ton nom d'utilisateur
-USER_PASS="motdepasse123"   # Mot de passe utilisateur
-ROOT_PASS="rootpassword123" # Mot de passe root
+DISK="/dev/sda"
+USERNAME="archuser"
+USER_PASS="motdepasse123"
+ROOT_PASS="rootpassword123"
 HOSTNAME="arch-laptop"
 # ==============================================================================
 
@@ -50,33 +50,26 @@ else
 fi
 
 echo "[INFO] Nettoyage nucléaire de $DISK et démontage forcé..."
-# Tuer tous les processus qui pourraient utiliser /mnt
 fuser -km /mnt 2>/dev/null || true
 sleep 1
 
-# Démonter /mnt récursivement et de manière "paresseuse" (lazy) au cas où une ancienne install aurait planté
 umount -R /mnt 2>/dev/null || true
 umount -l /mnt 2>/dev/null || true
 
-# Boucler pour démonter TOUTES les partitions du disque cible de force
 for part in ${DISK}*; do
     umount -l "$part" 2>/dev/null || true
 done
 
-# Désactiver les swaps et les mappings
 swapoff -a 2>/dev/null || true
 dmsetup remove_all 2>/dev/null || true
 
-# Nettoyer les signatures
 wipefs -a -f "$DISK"* 2>/dev/null || true
 wipefs -a -f "$DISK" 2>/dev/null || true
 
-# Détruire physiquement les tables GPT
 dd if=/dev/zero of="$DISK" bs=1M count=10 conv=fsync 2>/dev/null || true
 DISK_SIZE_SECTORS=$(blockdev --getsz "$DISK")
 dd if=/dev/zero of="$DISK" bs=512 count=10 seek=$((DISK_SIZE_SECTORS - 10)) conv=fsync 2>/dev/null || true
 
-# Forcer la relecture
 partprobe "$DISK" 2>/dev/null || true
 blockdev --rereadpt "$DISK" 2>/dev/null || true
 udevadm settle
@@ -109,7 +102,6 @@ mkdir -p /mnt/boot
 mount "$PART_EFI" /mnt/boot
 
 # 6. Installation du système strict minimum et optimisé
-# AJOUT DE ZIG ET AUTRES DÉPENDANCES DE COMPILATION POUR GHOSTTY
 echo "[INFO] Installation des paquets officiels..."
 pacstrap /mnt base base-devel linux-zen linux-zen-headers linux-firmware btrfs-progs \
     networkmanager sudo git neovim curl wget unzip rsync \
@@ -223,26 +215,29 @@ echo "[INFO] Configuration de sudo sans mot de passe temporaire..."
 echo "$USERNAME ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/temp
 chmod 0440 /etc/sudoers.d/temp
 
-# Préconfiguration de paru (sans SudoLoop pour éviter la boucle de 'y')
+# Préconfiguration de paru
 mkdir -p /home/$USERNAME/.config/paru
 cat << PARUCONF > /home/$USERNAME/.config/paru/paru.conf
 [options]
-SkipReview = yes
-CleanAfter = yes
-Provides = yes
-PgpFetch = yes
-CombinedUpgrade = yes
+SkipReview
+CleanAfter
+Provides
+PgpFetch
+CombinedUpgrade
+Makepkgflags = --noconfirm --skippgpcheck
 PARUCONF
 chown -R $USERNAME:$USERNAME /home/$USERNAME/.config/paru
 
-echo "[INFO] Compilation de paru depuis les sources (avec support swap)..."
-sudo -u $USERNAME bash -c "cd /tmp && git clone https://aur.archlinux.org/paru.git && cd paru && makepkg -si --noconfirm --skippgpcheck" < /dev/null || echo "[WARNING] Paru install failed"
+echo "[INFO] Compilation de paru depuis les sources..."
+# CORRECTION: yes | au lieu de < /dev/null pour répondre aux prompts
+yes | sudo -u $USERNAME bash -c "cd /tmp && git clone https://aur.archlinux.org/paru.git && cd paru && makepkg -si --noconfirm --skippgpcheck" || echo "[WARNING] Paru install failed"
 
 if ! command -v paru &> /dev/null; then
     echo "[ERROR] paru n'a pas pu être installé."
 else
-    echo "[INFO] Installation de ghostty et bluetui (avec support swap et zig)..."
-    sudo -u $USERNAME bash -c "paru -S --noconfirm --skipreview ghostty-git bluetui" < /dev/null || echo "[WARNING] Erreur pendant l'install de ghostty/bluetui"
+    echo "[INFO] Installation de ghostty et bluetui..."
+    # CORRECTION: yes | au lieu de < /dev/null
+    yes | sudo -u $USERNAME bash -c "paru -S --noconfirm --skipreview ghostty-git bluetui" || echo "[WARNING] Erreur pendant l'install de ghostty/bluetui"
 fi
 
 echo "[INFO] Restauration de la sécurité sudo..."
