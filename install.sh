@@ -58,12 +58,12 @@ if findmnt --source "$DISK" -n -o TARGET > /dev/null 2>&1; then
     fi
 fi
 
-# Démonter tout ce qui traîne sur /mnt et sur le disque cible
+# Démonter tout ce qui traîne
 umount -R /mnt 2>/dev/null
 umount -lf /mnt 2>/dev/null
 lsblk -lnpo NAME "$DISK" 2>/dev/null | xargs -I {} umount -lf {} 2>/dev/null
 
-# Arrêter les volumes chiffrés (LUKS), LVM, et RAID
+# Arrêter les volumes chiffrés, LVM, et RAID
 cryptsetup close --all 2>/dev/null
 vgchange -an 2>/dev/null
 mdadm --stop --scan 2>/dev/null
@@ -71,13 +71,13 @@ dmsetup remove_all 2>/dev/null
 swapoff -a 2>/dev/null
 
 # Nettoyer les signatures
+wipefs -a -f "$DISK"* 2>/dev/null
 wipefs -a -f "$DISK" 2>/dev/null
-lsblk -lnpo NAME "$DISK" 2>/dev/null | xargs -I {} wipefs -a -f {} 2>/dev/null
 
-# Destruction des tables GPT et MBR avec sgdisk
+# Destruction des tables GPT et MBR
 sgdisk --zap-all "$DISK" 2>/dev/null
 
-# Destruction physique (DD) du début et de la fin du disque pour forcer le noyau à tout oublier
+# Destruction physique (DD) du début et de la fin du disque
 echo "[INFO] Effacement physique des données (DD)..."
 DISK_SIZE_SECTORS=$(blockdev --getsz "$DISK")
 dd if=/dev/zero of="$DISK" bs=1M count=10 conv=fsync oflag=direct 2>/dev/null
@@ -116,9 +116,9 @@ mkdir -p /mnt/boot
 mount "$PART_EFI" /mnt/boot
 
 # 6. Installation du système strict minimum et optimisé
-# Inclusion de TOUTES les dépendances de compilation pour Ghostty et Hyprland
+# CORRECTION : Ajout de "yes |" et "--noconfirm" à la fin pour éviter le blocage
 echo "[INFO] Installation des paquets officiels..."
-pacstrap /mnt --noconfirm base base-devel linux-zen linux-zen-headers linux-firmware btrfs-progs \
+yes | pacstrap /mnt base base-devel linux-zen linux-zen-headers linux-firmware btrfs-progs \
     networkmanager sudo git neovim curl wget unzip rsync \
     $MICROCODE power-profiles-daemon thermald acpi acpid brightnessctl \
     pipewire pipewire-pulse pipewire-alsa pipewire-jack wireplumber \
@@ -128,7 +128,7 @@ pacstrap /mnt --noconfirm base base-devel linux-zen linux-zen-headers linux-firm
     fastfetch btop htop ncdu yazi lazygit \
     rust cargo go zig wayland-protocols scdoc \
     fontconfig freetype2 harfbuzz libxkbcommon pkgconf \
-    cmake ninja gcc make gnupg pacman-contrib xcb-util xcb-util-cursor xcb-util-wm xcb-util-keysyms
+    cmake ninja gcc make gnupg pacman-contrib xcb-util xcb-util-cursor xcb-util-wm xcb-util-keysyms --noconfirm
 
 # 7. Génération fstab optimisée
 echo "[INFO] Génération du fstab..."
@@ -207,7 +207,7 @@ systemctl enable thermald
 systemctl enable acpid
 systemctl enable bluetooth
 
-# Configuration SWAP (Créée AVANT la compilation pour éviter le Out of Memory)
+# Configuration SWAP
 echo "[INFO] Création d'un swapfile de 4Go (Anti-OOM)..."
 truncate -s 0 /swapfile
 chattr +C /swapfile
