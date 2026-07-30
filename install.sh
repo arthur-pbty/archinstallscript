@@ -93,13 +93,13 @@ mkdir -p /mnt/boot
 mount "$PART_EFI" /mnt/boot
 
 # 6. Installation du système strict minimum et optimisé
-echo "[INFO] Installation des paquets (Noyau ZEN, Hyprland, Wayland, Opti Laptop, TUI)..."
+echo "[INFO] Installation des paquets officiels..."
 pacstrap /mnt base base-devel linux-zen linux-zen-headers linux-firmware btrfs-progs \
     networkmanager sudo git neovim \
     $MICROCODE power-profiles-daemon thermald acpi acpid brightnessctl \
     pipewire pipewire-pulse pipewire-alsa pipewire-jack wireplumber \
     mesa wayland xdg-desktop-portal xdg-desktop-portal-hyprland \
-    hyprland wofi waybar swaybg ttf-jetbrains-mono-nerd \
+    hyprland wofi waybar swaybg ttf-jetbrains-mono-nerd kitty \
     bluez bluez-utils thunar playerctl \
     fastfetch btop htop ncdu yazi lazygit zram-generator
 
@@ -197,9 +197,11 @@ echo "[INFO] Configuration de sudo sans mot de passe temporaire pour l'installat
 echo "$USERNAME ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/temp
 chmod 0440 /etc/sudoers.d/temp
 
-echo "[INFO] Installation de paru-bin (évite de compiler Rust) et autres outils AUR..."
-sudo -u $USERNAME bash -c "cd /tmp && git clone https://aur.archlinux.org/paru-bin.git && cd paru-bin && makepkg -si --noconfirm"
-sudo -u $USERNAME bash -c "paru -S --noconfirm ghostty-git bluetui || true"
+echo "[INFO] Installation de paru-bin..."
+sudo -u $USERNAME bash -c "cd /tmp && git clone https://aur.archlinux.org/paru-bin.git && cd paru-bin && makepkg -si --noconfirm" || true
+
+echo "[INFO] Installation de ghostty et bluetui..."
+sudo -u $USERNAME bash -c "paru -S --noconfirm ghostty-git bluetui" || true
 
 echo "[INFO] Restauration de la sécurité sudo..."
 rm -f /etc/sudoers.d/temp
@@ -291,6 +293,7 @@ cat << 'HYPRCONF' > \$USER_HOME/.config/hypr/hyprland.lua
 ---- MONITORS ----
 ------------------
 
+-- See https://wiki.hypr.land/Configuring/Basics/Monitors/
 hl.monitor({
     output   = "",
     mode     = "preferred",
@@ -321,10 +324,6 @@ end)
 
 hl.env("XCURSOR_SIZE", "24")
 hl.env("HYPRCURSOR_SIZE", "24")
-
------------------------
------ PERMISSIONS -----
------------------------
 
 -----------------------
 ---- LOOK AND FEEL ----
@@ -454,7 +453,7 @@ local mainMod = "SUPER"
 
 hl.bind(mainMod .. " + Return", hl.dsp.exec_cmd(terminal))
 local closeWindowBind = hl.bind(mainMod .. " + W", hl.dsp.window.close())
-hl.bind(mainMod .. " + M", hl.dsp.exec_cmd("hyprctl dispatch exit"))
+hl.bind(mainMod .. " + M", hl.dsp.exec_cmd("command -v hyprshutdown >/dev/null 2>&1 && hyprshutdown || hyprctl dispatch 'hl.dsp.exit()'"))
 hl.bind(mainMod .. " + E", hl.dsp.exec_cmd(fileManager))
 hl.bind(mainMod .. " + V", hl.dsp.window.float({ action = "toggle" }))
 hl.bind(mainMod .. " + Space", hl.dsp.exec_cmd(menu))
@@ -530,7 +529,6 @@ if [ -z "\${WAYLAND_DISPLAY}" ] && [ "\${XDG_VTNR}" -eq 1 ]; then
     while true; do
         read -s -p "Entrez votre mot de passe pour demarrer Hyprland: " PASS
         echo ""
-        # Utilisation de sudo -k pour réinitialiser le cache et forcer la demande
         if echo "\$PASS" | sudo -S -k true 2>/dev/null; then
             exec Hyprland
             break
